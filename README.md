@@ -2,10 +2,6 @@
 
 Sistem navigasi otonom untuk mobile robot indoor berbasis **AMD Kria KR260**, mengintegrasikan **ROS 2 Humble** pada Processing System (PS) dengan **FPGA Programmable Logic (PL)** untuk akselerasi pemrosesan LiDAR dan path planning.
 
----
-
----
-
 ## Directory Structure
 
 ```
