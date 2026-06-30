@@ -4,36 +4,6 @@ Sistem navigasi otonom untuk mobile robot indoor berbasis **AMD Kria KR260**, me
 
 ---
 
-## System Overview
-
-```
-┌───────────────── KRIA KR260 ──────────────────┐
-│                                                 │
-│  PS (ARM Cortex-A53) — Linux Ubuntu 22.04       │
-│  ┌───────────────────────────────────────────┐  │
-│  │  ROS 2 Nodes                               │  │
-│  │  - sllidar_node       (LiDAR driver)       │  │
-│  │  - lidar_pl_node      (PS-PL processing)   │  │
-│  │  - computing_unit     (A* path planning)   │  │
-│  │  - control_unit       (motor control)      │  │
-│  │  - robot_web_ui       (web monitoring)     │  │
-│  └───────────────────────────────────────────┘  │
-│  ┌───────────────────────────────────────────┐  │
-│  │  PS-PL Interface                           │  │
-│  │  - UIO mmap (DMA, IP register, udmabuf)   │  │
-│  │  - AXI DMA (MM2S 32-bit, S2MM 128-bit)    │  │
-│  └───────────────────────────────────────────┘  │
-│                                                 │
-│  PL (FPGA fabric) — Vivado Block Design         │
-│  ┌───────────────────────────────────────────┐  │
-│  │  - lidar_hw_filter  (HLS pipeline II=1)   │  │
-│  │  - astar_kernel      (A* hardware)         │  │
-│  │  - AXI DMA           (data transfer)       │  │
-│  │  - AXI Interconnect                        │  │
-│  └───────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────┘
-```
-
 ---
 
 ## Directory Structure
