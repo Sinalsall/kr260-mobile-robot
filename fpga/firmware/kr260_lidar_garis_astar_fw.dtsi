@@ -1,0 +1,92 @@
+/dts-v1/;
+/plugin/;
+
+&fpga_full {
+    firmware-name = "kr260_lidar_garis_astar_fw.bit.bin";
+    pid = <0x0>;
+    resets = <&zynqmp_reset 116>;
+    uid = <0x0>;
+    clocking0: clocking0 {
+        #clock-cells = <0>;
+        assigned-clock-rates = <99999001>;
+        assigned-clocks = <&zynqmp_clk 71>;
+        clock-output-names = "fabric_clk";
+        clocks = <&zynqmp_clk 71>;
+        compatible = "xlnx,fclk";
+    };
+    clocking1: clocking1 {
+        #clock-cells = <0>;
+        assigned-clock-rates = <99999001>;
+        assigned-clocks = <&zynqmp_clk 72>;
+        clock-output-names = "fabric_clk";
+        clocks = <&zynqmp_clk 72>;
+        compatible = "xlnx,fclk";
+    };
+    afi0: afi0 {
+        compatible = "xlnx,afi-fpga";
+        config-afi = < 0 0>, <1 0>, <2 0>, <3 0>, <4 0>, <5 0>, <6 0>, <7 0>, <8 0>, <9 0>, <10 0>, <11 0>, <12 0>, <13 0>, <14 0xa00>, <15 0x000>;
+        resets = <&zynqmp_reset 116>, <&zynqmp_reset 117>, <&zynqmp_reset 118>, <&zynqmp_reset 119>;
+    };
+    zyxclmm_drm {
+        compatible = "xlnx,zocl";
+        interrupt-parent = <&gic>;
+        interrupts = <0x0 0x89 0x4>, <0x0 0x90 0x4>, <0x0 0x91 0x4>, <0x0 0x92 0x4>, <0x0 0x93 0x4>, <0x0 0x94 0x4>, <0x0 0x95 0x4>, <0x0 0x96 0x4>;
+    };
+};
+
+&amba {
+    #address-cells = <2>;
+    #size-cells = <2>;
+    axi_dma_0: dma@a0000000 {
+        #dma-cells = <1>;
+        clock-names = "m_axi_mm2s_aclk", "m_axi_s2mm_aclk", "s_axi_lite_aclk";
+        clocks = <&zynqmp_clk 71>, <&zynqmp_clk 71>, <&zynqmp_clk 71>;
+        compatible = "generic-uio";
+        interrupt-names = "mm2s_introut", "s2mm_introut";
+        interrupt-parent = <&gic>;
+        interrupts = <0 89 4 0 90 4>;
+        reg = <0x0 0xa0000000 0x0 0x10000>;
+        xlnx,addrwidth = <0x20>;
+        xlnx,sg-length-width = <0x1a>;
+        dma-channel@a0000000 {
+            compatible = "xlnx,axi-dma-mm2s-channel";
+            dma-channels = <0x1>;
+            interrupts = <0 89 4>;
+            xlnx,datawidth = <0x20>;
+            xlnx,device-id = <0x0>;
+        };
+        dma-channel@a0000030 {
+            compatible = "xlnx,axi-dma-s2mm-channel";
+            dma-channels = <0x1>;
+            interrupts = <0 90 4>;
+            xlnx,datawidth = <0x80>;
+            xlnx,device-id = <0x0>;
+        };
+    };
+    lidar_hw_filter_0: lidar_hw_filter@b0000000 {
+        clock-names = "ap_clk";
+        clocks = <&zynqmp_clk 71>;
+        compatible = "generic-uio";
+        interrupt-names = "interrupt";
+        interrupt-parent = <&gic>;
+        interrupts = <0 91 4>;
+        reg = <0x0 0xb0000000 0x0 0x10000>;
+        xlnx,s-axi-ctrl-addr-width = <0x7>;
+        xlnx,s-axi-ctrl-data-width = <0x20>;
+    };
+    line_sensing_0: line_sensing@a0010000 {
+        clock-names = "S_AXI_ACLK";
+        clocks = <&zynqmp_clk 71>;
+        compatible = "xlnx,line-sensing-1.0";
+        reg = <0x0 0xa0010000 0x0 0x1000>;
+    };
+    astar_kernel_0: astar@b0010000 {
+        compatible = "generic-uio";
+        reg = <0x0 0xb0010000 0x0 0x10000>;
+    };
+    udmabuf_dma_lidar: udmabuf@0 {
+        compatible = "ikwzm,u-dma-buf";
+        device-name = "udmabuf0";
+        size = <0x00800000>;
+    };
+};

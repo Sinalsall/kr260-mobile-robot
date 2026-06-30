@@ -1,0 +1,296 @@
+#include "rclcpp/rclcpp.hpp"
+#include "sensor_msgs/msg/laser_scan.hpp"
+#include "visualization_msgs/msg/marker_array.hpp"
+#include "std_msgs/msg/float32.hpp"
+#include "std_msgs/msg/bool.hpp"
+#include <cmath>
+#include <vector>
+#include <algorithm>
+#include <limits>
+
+using std::placeholders::_1;
+
+class LidarFilterNode : public rclcpp::Node {
+public:
+    LidarFilterNode() : Node("lidar_filter_node") {
+
+        // ===== DEKLARASI ROS 2 PARAMETERS (tunable dari launch file) =====
+        // ROI Parameters
+        this->declare_parameter("roi_x_min", 0.08);
+        this->declare_parameter("roi_x_max", 1.5);
+        this->declare_parameter("roi_y_margin", 0.10);
+
+        // Clustering & Filtering Parameters
+        this->declare_parameter("cluster_tolerance", 0.10);
+        this->declare_parameter("min_obj_size", 0.06);
+        this->declare_parameter("min_obj_points", 3);
+
+        // Safety Zone Parameters
+        this->declare_parameter("emergency_distance", 0.20);
+        this->declare_parameter("warning_distance", 0.50);
+
+        // Watchdog timeout (detik) — jika tidak ada /scan selama ini, publish e-stop
+        this->declare_parameter("scan_timeout_sec", 0.5);
+        this->declare_parameter("scan_topic", std::string("/scan"));
+
+        // Ambil nilai parameter
+        roi_x_min_       = this->get_parameter("roi_x_min").as_double();
+        roi_x_max_       = this->get_parameter("roi_x_max").as_double();
+        roi_y_margin_    = this->get_parameter("roi_y_margin").as_double();
+        cluster_tol_     = this->get_parameter("cluster_tolerance").as_double();
+        min_obj_size_    = this->get_parameter("min_obj_size").as_double();
+        min_obj_points_  = this->get_parameter("min_obj_points").as_int();
+        emergency_dist_  = this->get_parameter("emergency_distance").as_double();
+        warning_dist_    = this->get_parameter("warning_distance").as_double();
+        double timeout_s = this->get_parameter("scan_timeout_sec").as_double();
+        std::string scan_topic = this->get_parameter("scan_topic").as_string();
+
+        // ===== QoS & SUBSCRIBER =====
+        auto qos = rclcpp::SensorDataQoS();
+
+        scan_sub_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
+            scan_topic, qos, std::bind(&LidarFilterNode::scan_callback, this, _1));
+
+        // ===== PUBLISHERS =====
+        marker_pub_   = this->create_publisher<visualization_msgs::msg::MarkerArray>("/obstacle_boxes", 10);
+        nearest_pub_  = this->create_publisher<std_msgs::msg::Float32>("/obstacle_nearest_distance", 10);
+        estop_pub_    = this->create_publisher<std_msgs::msg::Bool>("/emergency_stop", 10);
+
+        // ===== WATCHDOG TIMER =====
+        last_scan_time_ = this->now();
+        watchdog_timer_ = this->create_wall_timer(
+            std::chrono::milliseconds(static_cast<int>(timeout_s * 1000)),
+            std::bind(&LidarFilterNode::watchdog_callback, this));
+
+        // ===== DYNAMIC PARAMETER CALLBACK =====
+        param_cb_handle_ = this->add_on_set_parameters_callback(
+            std::bind(&LidarFilterNode::on_parameter_change, this, _1));
+
+        RCLCPP_INFO(this->get_logger(),
+            "Lidar Filter Node Active. ROI: x=[%.2f, %.2f] y_margin=%.2f | "
+            "Emergency<%.2fm Warning<%.2fm",
+            roi_x_min_, roi_x_max_, roi_y_margin_, emergency_dist_, warning_dist_);
+        RCLCPP_INFO(this->get_logger(), "Subscribed scan topic: %s", scan_topic.c_str());
+    }
+
+private:
+    // ===== TUNABLE PARAMETERS =====
+    double roi_x_min_;
+    double roi_x_max_;
+    double roi_y_margin_;
+    double cluster_tol_;
+    double min_obj_size_;
+    int    min_obj_points_;
+    double emergency_dist_;
+    double warning_dist_;
+
+    // ===== STATE =====
+    rclcpp::Time last_scan_time_;
+    int prev_marker_count_ = 0;  // Untuk pembersihan marker yang efisien
+
+    struct Point { float x, y; };
+    struct BoundingBox {
+        float x_min, x_max, y_min, y_max;
+        int point_count;
+    };
+
+    // ===== DYNAMIC PARAMETER UPDATE =====
+    rcl_interfaces::msg::SetParametersResult on_parameter_change(
+        const std::vector<rclcpp::Parameter> & params)
+    {
+        for (const auto & p : params) {
+            if (p.get_name() == "roi_x_min")          roi_x_min_      = p.as_double();
+            else if (p.get_name() == "roi_x_max")     roi_x_max_      = p.as_double();
+            else if (p.get_name() == "roi_y_margin")   roi_y_margin_   = p.as_double();
+            else if (p.get_name() == "cluster_tolerance") cluster_tol_ = p.as_double();
+            else if (p.get_name() == "min_obj_size")   min_obj_size_   = p.as_double();
+            else if (p.get_name() == "min_obj_points") min_obj_points_ = p.as_int();
+            else if (p.get_name() == "emergency_distance") emergency_dist_ = p.as_double();
+            else if (p.get_name() == "warning_distance")   warning_dist_   = p.as_double();
+        }
+        rcl_interfaces::msg::SetParametersResult result;
+        result.successful = true;
+        return result;
+    }
+
+    // ===== WATCHDOG: Deteksi LiDAR mati / topik berhenti =====
+    void watchdog_callback() {
+        double elapsed = (this->now() - last_scan_time_).seconds();
+        double timeout = this->get_parameter("scan_timeout_sec").as_double();
+
+        if (elapsed > timeout) {
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                "WATCHDOG: Tidak menerima /scan selama %.1f detik! Publish E-STOP.", elapsed);
+
+            std_msgs::msg::Bool estop;
+            estop.data = true;
+            estop_pub_->publish(estop);
+        }
+    }
+
+    // ===== MAIN SCAN CALLBACK =====
+    void scan_callback(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
+        last_scan_time_ = this->now();
+
+        std::vector<Point> filtered_points;
+        visualization_msgs::msg::MarkerArray marker_array;
+
+        // --- Efisien: Hapus marker lama berdasarkan ID, bukan DELETEALL ---
+        for (int i = 0; i < prev_marker_count_; ++i) {
+            visualization_msgs::msg::Marker del;
+            del.header.frame_id = msg->header.frame_id;
+            del.header.stamp = msg->header.stamp;
+            del.ns = "obstacles";
+            del.id = i;
+            del.action = visualization_msgs::msg::Marker::DELETE;
+            marker_array.markers.push_back(del);
+        }
+
+        float nearest_obstacle_dist = std::numeric_limits<float>::infinity();
+
+        // --- TAHAP 1: FILTERING (Polar -> Kartesian -> Cek ROI) ---
+        for (size_t i = 0; i < msg->ranges.size(); ++i) {
+            float r = msg->ranges[i];
+            if (r < msg->range_min || r > msg->range_max || std::isnan(r) || std::isinf(r)) continue;
+
+            float theta = msg->angle_min + i * msg->angle_increment;
+            float x = r * std::cos(theta);
+            float y = r * std::sin(theta);
+
+            // Cek apakah masuk dalam koridor lintasan robot
+            if (x >= roi_x_min_ && x <= roi_x_max_ && std::abs(y) <= roi_y_margin_) {
+                filtered_points.push_back({x, y});
+
+                // Track jarak terpendek per titik mentah (sebelum clustering)
+                float dist = std::sqrt(x * x + y * y);
+                nearest_obstacle_dist = std::min(nearest_obstacle_dist, dist);
+            }
+        }
+
+        // --- TAHAP 2: SEQUENTIAL RADIAL CLUSTERING (diperbaiki) ---
+        std::vector<BoundingBox> clusters;
+
+        if (!filtered_points.empty()) {
+            BoundingBox current_box = {filtered_points[0].x, filtered_points[0].x,
+                                       filtered_points[0].y, filtered_points[0].y, 1};
+
+            for (size_t i = 1; i < filtered_points.size(); ++i) {
+                // Hitung jarak ke titik terdekat di SELURUH bounding box saat ini,
+                // bukan hanya ke titik sebelumnya — mengurangi risk merge yang salah.
+                float dx_to_center = filtered_points[i].x - (current_box.x_min + current_box.x_max) / 2.0f;
+                float dy_to_center = filtered_points[i].y - (current_box.y_min + current_box.y_max) / 2.0f;
+
+                // Jarak ke tepi bounding box terdekat (signed distance -> clamp ke 0)
+                float half_w = (current_box.x_max - current_box.x_min) / 2.0f;
+                float half_h = (current_box.y_max - current_box.y_min) / 2.0f;
+                float dx_edge = std::max(0.0f, std::abs(dx_to_center) - half_w);
+                float dy_edge = std::max(0.0f, std::abs(dy_to_center) - half_h);
+                float dist_to_box = std::sqrt(dx_edge * dx_edge + dy_edge * dy_edge);
+
+                if (dist_to_box <= cluster_tol_) {
+                    // Masih objek yang sama — perluas bounding box
+                    current_box.x_min = std::min(current_box.x_min, filtered_points[i].x);
+                    current_box.x_max = std::max(current_box.x_max, filtered_points[i].x);
+                    current_box.y_min = std::min(current_box.y_min, filtered_points[i].y);
+                    current_box.y_max = std::max(current_box.y_max, filtered_points[i].y);
+                    current_box.point_count++;
+                } else {
+                    // Jarak terlalu jauh, simpan objek lama, buat objek baru
+                    clusters.push_back(current_box);
+                    current_box = {filtered_points[i].x, filtered_points[i].x,
+                                   filtered_points[i].y, filtered_points[i].y, 1};
+                }
+            }
+            clusters.push_back(current_box);
+        }
+
+        // --- TAHAP 3: FILTER UKURAN & BUAT MARKER + SAFETY OUTPUT ---
+        int id = 0;
+        float nearest_validated_dist = std::numeric_limits<float>::infinity();
+
+        for (const auto& box : clusters) {
+            float obj_width  = box.y_max - box.y_min;
+            float obj_length = box.x_max - box.x_min;
+
+            // VALIDASI NOISE: Apakah objek ini obstacle sungguhan?
+            if ((obj_width >= min_obj_size_ || obj_length >= min_obj_size_) &&
+                 box.point_count >= min_obj_points_) {
+
+                // Jarak terdekat obstacle yang tervalidasi (front edge)
+                nearest_validated_dist = std::min(nearest_validated_dist, box.x_min);
+
+                visualization_msgs::msg::Marker marker;
+                marker.header.frame_id = msg->header.frame_id;
+                marker.header.stamp = msg->header.stamp;
+                marker.ns = "obstacles";
+                marker.id = id++;
+                marker.type = visualization_msgs::msg::Marker::CUBE;
+                marker.action = visualization_msgs::msg::Marker::ADD;
+
+                marker.pose.position.x = (box.x_min + box.x_max) / 2.0;
+                marker.pose.position.y = (box.y_min + box.y_max) / 2.0;
+                marker.pose.position.z = 0.0;
+                marker.pose.orientation.w = 1.0;
+
+                marker.scale.x = std::max(0.06f, obj_length);
+                marker.scale.y = std::max(0.06f, obj_width);
+                marker.scale.z = 0.2;
+
+                // Warna berdasarkan zona bahaya
+                if (box.x_min < emergency_dist_) {
+                    // MERAH TERANG — Emergency Zone
+                    marker.color.r = 1.0f; marker.color.g = 0.0f; marker.color.b = 0.0f;
+                    marker.color.a = 0.8f;
+                } else if (box.x_min < warning_dist_) {
+                    // KUNING — Warning Zone
+                    marker.color.r = 1.0f; marker.color.g = 0.8f; marker.color.b = 0.0f;
+                    marker.color.a = 0.6f;
+                } else {
+                    // MERAH TRANSPARAN — Normal detection
+                    marker.color.r = 1.0f; marker.color.g = 0.0f; marker.color.b = 0.0f;
+                    marker.color.a = 0.4f;
+                }
+
+                marker.lifetime = rclcpp::Duration::from_seconds(0.3);
+                marker_array.markers.push_back(marker);
+            }
+        }
+
+        prev_marker_count_ = id;
+
+        // --- PUBLISH SEMUA OUTPUT ---
+        marker_pub_->publish(marker_array);
+
+        // Publish jarak obstacle tervalidasi terdekat
+        std_msgs::msg::Float32 dist_msg;
+        dist_msg.data = nearest_validated_dist;
+        nearest_pub_->publish(dist_msg);
+
+        // Publish emergency stop flag
+        std_msgs::msg::Bool estop_msg;
+        estop_msg.data = (nearest_validated_dist < emergency_dist_);
+        estop_pub_->publish(estop_msg);
+
+        // Log periodik untuk monitoring
+        if (nearest_validated_dist < warning_dist_) {
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 500,
+                "OBSTACLE @ %.2fm | clusters=%zu validated=%d",
+                nearest_validated_dist, clusters.size(), id);
+        }
+    }
+
+    // ==== MEMBER VARIABLES ====
+    rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;
+    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr nearest_pub_;
+    rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr estop_pub_;
+    rclcpp::TimerBase::SharedPtr watchdog_timer_;
+    rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;
+};
+
+int main(int argc, char * argv[]) {
+    rclcpp::init(argc, argv);
+    rclcpp::spin(std::make_shared<LidarFilterNode>());
+    rclcpp::shutdown();
+    return 0;
+}

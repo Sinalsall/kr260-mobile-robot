@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  CycloneDDS Template Configuration for LAPTOP
+  
+  INSTRUKSI:
+  1. Copy file ini ke laptop: ~/cyclonedds_laptop.xml
+  2. Edit interface name sesuai WiFi laptop Anda (line 18)
+  3. Edit KRIA IP jika berbeda (line 26)
+  4. Set environment: export CYCLONEDDS_URI=file://$HOME/cyclonedds_laptop.xml
+  
+  Cek nama interface WiFi laptop dengan: ip link show | grep wl
+  Contoh: wlp3s0, wlan0, wlx0013ef123456
+-->
+<CycloneDDS xmlns="https://cdds.io/config"
+            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+            xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
+  <Domain id="any">
+    <General>
+      <!-- EDIT: Ubah "wlp3s0" ke nama interface WiFi laptop Anda -->
+      <Interfaces>
+        <NetworkInterface name="wlp3s0" priority="default" multicast="true" />
+      </Interfaces>
+      <AllowMulticast>spdp</AllowMulticast>
+    </General>
+    <Discovery>
+      <!-- EDIT: Ubah IP jika KRIA Anda berbeda dari 192.168.0.100 -->
+      <Peers>
+        <Peer address="192.168.0.100"/>
+        <Peer address="localhost"/>
+      </Peers>
+      <ParticipantIndex>auto</ParticipantIndex>
+      <MaxAutoParticipantIndex>120</MaxAutoParticipantIndex>
+    </Discovery>
+    <Internal>
+      <SocketReceiveBufferSize min="default"/>
+    </Internal>
+  </Domain>
+</CycloneDDS>

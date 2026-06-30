@@ -1,0 +1,244 @@
+═══════════════════════════════════════════════════════════════════════
+              LAPTOP SETUP - QUICK REFERENCE CARD
+           ROS2 Communication dengan KRIA Robot via WiFi
+═══════════════════════════════════════════════════════════════════════
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  SETUP OTOMATIS (3 Langkah - MUDAH!)                              ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+# Di LAPTOP, buka terminal dan jalankan:
+
+# 1. Copy files dari KRIA (password KRIA required)
+scp ubuntu@192.168.0.100:~/kria_ros2_ws/src/lidar_spatial_filter/config/cyclonedds_laptop.xml ~/
+scp ubuntu@192.168.0.100:~/kria_ros2_ws/src/lidar_spatial_filter/config/setup_laptop_auto.sh ~/
+
+# 2. Jalankan setup otomatis
+chmod +x ~/setup_laptop_auto.sh
+./setup_laptop_auto.sh
+
+# 3. SELESAI! Setiap buka terminal baru:
+source ~/setup_ros2_kria.sh
+
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  SETUP MANUAL (6 Langkah - Lebih Detail)                          ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+STEP 1: Copy config file
+━━━━━━━━━━━━━━━━━━━━━━━
+scp ubuntu@192.168.0.100:~/kria_ros2_ws/src/lidar_spatial_filter/config/cyclonedds_laptop.xml ~/
+
+
+STEP 2: Cek WiFi interface name
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ip a | grep -E "wl|wlan"
+
+# Catat nama (contoh: wlp3s0, wlan0, wlxXXXXXX)
+
+
+STEP 3: Edit config (HANYA jika interface ≠ wlp3s0)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+nano ~/cyclonedds_laptop.xml
+
+# Cari baris:
+#   <NetworkInterface name="wlp3s0" ...
+# Ganti "wlp3s0" dengan nama interface Anda
+# Simpan: Ctrl+O, Enter, Ctrl+X
+
+
+STEP 4: Install CycloneDDS
+━━━━━━━━━━━━━━━━━━━━━━━━━
+sudo apt update
+sudo apt install -y ros-humble-rmw-cyclonedds-cpp
+
+# Ganti 'humble' sesuai ROS2 versi Anda
+
+
+STEP 5: Buat script setup
+━━━━━━━━━━━━━━━━━━━━━━━━━
+nano ~/setup_ros2_kria.sh
+
+# Copy-paste isi berikut:
+┌─────────────────────────────────────────────────────────────────┐
+│ #!/bin/bash                                                     │
+│ source /opt/ros/humble/setup.bash                               │
+│ export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp                    │
+│ export CYCLONEDDS_URI=file://$HOME/cyclonedds_laptop.xml        │
+│ export ROS_DOMAIN_ID=30                                         │
+│ export ROS_LOCALHOST_ONLY=0                                     │
+│ echo "✓ ROS2 Ready for KRIA Communication!"                     │
+└─────────────────────────────────────────────────────────────────┘
+
+# Simpan: Ctrl+O, Enter, Ctrl+X
+# Buat executable:
+chmod +x ~/setup_ros2_kria.sh
+
+
+STEP 6: Test environment
+━━━━━━━━━━━━━━━━━━━━━━━━━
+source ~/setup_ros2_kria.sh
+
+# Verifikasi output:
+echo $RMW_IMPLEMENTATION     # harus: rmw_cyclonedds_cpp
+echo $ROS_DOMAIN_ID          # harus: 30
+
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  PENGGUNAAN SEHARI-HARI                                           ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+⚠️  WAJIB di setiap terminal baru:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+source ~/setup_ros2_kria.sh
+
+
+Lihat topics dari KRIA:
+━━━━━━━━━━━━━━━━━━━━━━━
+ros2 topic list
+ros2 node list
+
+
+Subscribe topic dari KRIA:
+━━━━━━━━━━━━━━━━━━━━━━━━━
+ros2 topic echo /nama_topic
+
+
+Publish ke KRIA:
+━━━━━━━━━━━━━━━
+ros2 topic pub /test std_msgs/String "data: 'Hello KRIA'"
+
+
+Lihat info topic:
+━━━━━━━━━━━━━━━
+ros2 topic info /nama_topic
+
+
+Call service KRIA:
+━━━━━━━━━━━━━━━━
+ros2 service list
+ros2 service call /nama_service tipe_service "{parameter: value}"
+
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  TIPS & TRICKS                                                    ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+Auto-load di setiap terminal:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+echo "source ~/setup_ros2_kria.sh" >> ~/.bashrc
+
+
+Cek koneksi ke KRIA:
+━━━━━━━━━━━━━━━━━━━━
+ping 192.168.0.100              # Via WiFi
+ping 100.76.130.74              # Via Tailscale
+
+
+Monitor bandwidth ROS2:
+━━━━━━━━━━━━━━━━━━━━━━
+ros2 topic bw /nama_topic       # Bandwidth usage
+ros2 topic hz /nama_topic       # Publish frequency
+
+
+Debug connection:
+━━━━━━━━━━━━━━━━━
+export CYCLONEDDS_VERBOSITY=trace
+# Re-source setup untuk enable logging
+
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  TROUBLESHOOTING                                                  ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+❌ Problem: "ros2: command not found"
+✅ Solusi:
+   source /opt/ros/humble/setup.bash
+
+
+❌ Problem: Tidak bisa copy file dari KRIA
+✅ Solusi:
+   # Test koneksi dulu
+   ping 192.168.0.100
+   
+   # Coba via Tailscale
+   scp ubuntu@100.76.130.74:~/kria_ros2_ws/.../cyclonedds_laptop.xml ~/
+
+
+❌ Problem: ros2 topic list kosong / tidak ada KRIA topics
+✅ Solusi:
+   1. Pastikan sudah: source ~/setup_ros2_kria.sh
+   2. Cek ROS_DOMAIN_ID sama (30):
+      echo $ROS_DOMAIN_ID
+   3. Restart ROS2 daemon:
+      ros2 daemon stop
+      ros2 daemon start
+   4. Pastikan KRIA running ROS2 nodes
+
+
+❌ Problem: Permission denied saat scp
+✅ Solusi:
+   # Pastikan password KRIA benar
+   # Atau setup SSH key dulu
+
+
+❌ Problem: Interface WiFi berbeda setiap restart
+✅ Solusi:
+   # Cek interface aktif:
+   ip a | grep "state UP" | grep -E "wl|wlan"
+   
+   # Update config jika berubah
+
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  FILE LOCATIONS                                                   ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+Di LAPTOP setelah setup:
+  ~/cyclonedds_laptop.xml      → CycloneDDS config
+  ~/setup_ros2_kria.sh         → Environment setup script
+  ~/setup_laptop_auto.sh       → Auto setup script (optional)
+
+Di KRIA (source files):
+  ~/kria_ros2_ws/src/lidar_spatial_filter/config/
+    ├── cyclonedds_laptop.xml
+    ├── setup_laptop_auto.sh
+    └── LAPTOP_SETUP_MANUAL.md
+
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  NETWORK INFO                                                     ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+KRIA Robot:
+  WiFi IP:       192.168.0.100
+  Tailscale IP:  100.76.130.74
+  WiFi SSID:     OKOKOK
+  ROS_DOMAIN_ID: 30
+
+Laptop harus:
+  - Terhubung ke WiFi OKOKOK yang sama
+  - ROS_DOMAIN_ID = 30
+  - CycloneDDS configured
+
+
+═══════════════════════════════════════════════════════════════════════
+                      QUICK COMMAND REFERENCE
+═══════════════════════════════════════════════════════════════════════
+
+Setup (once):          scp ubuntu@192.168.0.100:~/.../cyclonedds_laptop.xml ~/
+                       ./setup_laptop_auto.sh
+
+Every terminal:        source ~/setup_ros2_kria.sh
+
+List topics:           ros2 topic list
+Echo topic:            ros2 topic echo /topic_name
+Publish:               ros2 topic pub /topic std_msgs/String "data: 'msg'"
+List nodes:            ros2 node list
+List services:         ros2 service list
+
+Debug:                 ping 192.168.0.100
+                       echo $ROS_DOMAIN_ID
+                       ros2 daemon stop && ros2 daemon start
+
+═══════════════════════════════════════════════════════════════════════

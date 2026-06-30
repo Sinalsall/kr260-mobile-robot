@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  CycloneDDS Configuration for KRIA KR260 Robot
+  Generated: Thu Apr  2 11:59:42 AM UTC 2026
+  
+  Mode: Wireless (wlx6c4cbc88d820)
+  KRIA IP: 192.168.0.100
+  Laptop IP: 192.168.0.104
+  
+  This config bypasses CloudflareWARP/Tailscale by binding to physical interface only.
+-->
+<CycloneDDS xmlns="https://cdds.io/config"
+            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+            xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
+  <Domain id="any">
+    <General>
+      <!-- Bind to WiFi interface, bypass VPN tunnels -->
+      <Interfaces>
+        <NetworkInterface name="tailscale0" priority="default" multicast="true" />
+      </Interfaces>
+      <AllowMulticast>spdp</AllowMulticast>
+    </General>
+    <Discovery>
+      <!-- Unicast peer discovery for reliable connection -->
+      <Peers>
+        <Peer address="100.74.153.18"/>
+        <Peer address="localhost"/>
+      </Peers>
+      <ParticipantIndex>auto</ParticipantIndex>
+      <MaxAutoParticipantIndex>120</MaxAutoParticipantIndex>
+    </Discovery>
+    <Internal>
+      <SocketReceiveBufferSize min="default"/>
+    </Internal>
+  </Domain>
+</CycloneDDS>

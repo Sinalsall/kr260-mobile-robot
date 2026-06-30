@@ -1,0 +1,48 @@
+# .gitignore — KR260 Mobile Robot
+
+# Build artifacts
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+
+# FPGA binary outputs (regenerated from source)
+fpga/**/*.bit
+fpga/**/*.bit.bin
+fpga/**/*.dtbo
+fpga/**/*.xclbin
+fpga/hls/**/solution*/
+fpga/vivado/**/.cache/
+fpga/vivado/**/.Xil/
+fpga/vivado/**/*.jou
+fpga/vivado/**/*.log
+
+# Vitis HLS intermediate
+fpga/hls/**/proj_*/
+fpga/hls/**/csim/
+fpga/hls/**/sim/
+fpga/hls/**/syn/
+fpga/hls/export/
+
+# Vivado intermediate
+fpga/vivado/**/*.runs/
+fpga/vivado/**/*.srcs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# ROS
+ros2_ws/src/*/log/
+ros2_ws/src/*/*.egg-info/
+
+# OS
+.DS_Store
+Thumbs.db

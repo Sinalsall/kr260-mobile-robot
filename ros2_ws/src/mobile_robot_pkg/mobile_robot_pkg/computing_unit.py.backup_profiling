@@ -1,0 +1,1224 @@
+import json
+import heapq
+import math
+import time
+import numpy as np
+from datetime import datetime
+import rclpy
+from rclpy.node import Node
+from geometry_msgs.msg import Twist
+from std_msgs.msg import String, Bool, Float32
+from sensor_msgs.msg import PointCloud2
+from sensor_msgs_py import point_cloud2
+
+
+# ==========================================
+# HELPER FUNCTIONS
+# ==========================================
+def clamp(value, min_value, max_value):
+    return max(min(value, max_value), min_value)
+
+def wrap_angle(angle):
+    while angle > math.pi:
+        angle -= 2.0 * math.pi
+    while angle < -math.pi:
+        angle += 2.0 * math.pi
+    return angle
+
+def angle_diff(target, current):
+    return wrap_angle(target - current)
+
+def heuristic(a, b):
+    # Manhattan distance
+    return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+def cell_traversal_cost(cell_value):
+    # 0 = obstacle, 1 = preferred line, 3 = open space non-line
+    if cell_value == 1:
+        return 1.0
+    if cell_value == 3:
+        return 3.0
+    return math.inf
+
+def astar(start, goal, grid, allow_offline=True):
+    rows = len(grid)
+    cols = len(grid[0])
+
+    def in_bounds(cell):
+        r, c = cell
+        return 0 <= r < rows and 0 <= c < cols
+
+    def cell_cost(r, c):
+        val = grid[r][c]
+        if val == 1: 
+            return 1.0  # Jalur garis 
+        if val == 3: 
+            return 1.0 if allow_offline else math.inf  
+            
+        # --- BYPASS: ESCAPE BUBBLE (Gelembung Penalti) ---
+        if val == 0 and allow_offline:
+            # Hitung jarak dari posisi awal robot ke sel ini (jarak kotak / Chebyshev)
+            dist_to_start = max(abs(r - start[0]), abs(c - start[1]))
+            
+            # Jika sel rintangan berada sangat dekat dengan robot (misal radius 4 sel),
+            # izinkan dilewati tapi dengan PENALTI SANGAT MAHAL.
+            # A* akan terpaksa rute ini hanya untuk kabur terdekat ke sel aman (cost 1.0).
+            if dist_to_start <= 4:
+                return 1000.0
+                
+        return math.inf  # Obstacle (0) di luar radius tetap mustahil ditembus
+
+    if not in_bounds(start) or not in_bounds(goal): return None
+    
+    # Karena sel start sekarang bernilai 1000.0 (bukan inf) jika terjebak, 
+    # pengecekan di bawah ini akan lolos dan A* bisa merencanakan jalan keluar!
+    if math.isinf(cell_cost(start[0], start[1])) or math.isinf(cell_cost(goal[0], goal[1])): return None
+
+    open_list = [(heuristic(start, goal), 0.0, start)]
+    came_from = {}
+    g_score = {start: 0.0}
+    closed_set = set()
+
+    while open_list:
+        _, current_g, current = heapq.heappop(open_list)
+        if current in closed_set: continue
+        if current == goal:
+            path = [current]
+            while current in came_from:
+                current = came_from[current]
+                path.append(current)
+            return path[::-1]
+
+        closed_set.add(current)
+        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            neighbor = (current[0] + dr, current[1] + dc)
+            if not in_bounds(neighbor) or neighbor in closed_set: continue
+            
+            step_cost = cell_cost(neighbor[0], neighbor[1])
+            if math.isinf(step_cost): continue
+
+            tentative_g = current_g + step_cost
+            if tentative_g < g_score.get(neighbor, math.inf):
+                came_from[neighbor] = current
+                g_score[neighbor] = tentative_g
+                heapq.heappush(open_list, (tentative_g + heuristic(neighbor, goal), tentative_g, neighbor))
+
+    return None
+
+
+# ==========================================
+# COMPUTING UNIT
+# ==========================================
+class ComputingUnit(Node):
+    def __init__(self):
+        super().__init__('computing_unit')
+        # ------------------------------------------
+        # PARAMETERS
+        # ------------------------------------------
+        self.declare_parameter('map_path', 'map.json') 
+
+        # Kinematika robot
+        self.declare_parameter('wheel_radius_m', 0.033)
+        self.declare_parameter('wheel_separation_m', 0.160)
+
+        # Batas twist
+        self.declare_parameter('max_linear_x', 0.08)
+        self.declare_parameter('max_angular_z', 2.00)
+
+        # Gain kontrol (A*)
+        self.declare_parameter('k_linear', 1.2)
+        self.declare_parameter('k_angular_rotate', 0.8)
+        self.declare_parameter('k_angular_move', 1.5)
+
+        self.declare_parameter('min_linear_x', 0.03)
+
+        # Threshold state
+        self.declare_parameter('heading_tolerance_deg', 5.0)
+        self.declare_parameter('cell_reached_tolerance_m', 0.0025)
+
+        # Timing
+        self.declare_parameter('control_period_s', 0.01)
+        self.declare_parameter('feedback_timeout_s', 0.5)
+        self.declare_parameter('stop_dwell_s', 0.10)
+
+        # Clearance & Avoidance
+        self.declare_parameter('robot_length_m', 0.25)
+        self.declare_parameter('robot_width_m', 0.20)
+        self.declare_parameter('side_body_clearance_m', 0.08)
+        self.declare_parameter('front_body_clearance_m', 0.10)
+        self.declare_parameter('obstacle_detect_distance_m', 0.0)
+        self.declare_parameter('lidar_inflation_radius_m', 0.15)
+        self.declare_parameter('lidar_obstacle_timeout_s', 0.50)
+        self.declare_parameter('lidar_memory_duration_s', 0.80)
+        self.declare_parameter('wall_clearance_m', 0.05)
+        self.declare_parameter('avoid_min_time_s', 2.00)
+        self.declare_parameter('avoid_obstacle_lost_timeout_s', 0.70)
+        self.declare_parameter('avoid_mode_cooldown_s', 0.50)
+        self.declare_parameter('rejoin_distance_m', 1.20) 
+        self.declare_parameter('rejoin_heading_tolerance_deg', 135.0) 
+        self.declare_parameter('rejoin_search_ahead_cells', 40) 
+        self.declare_parameter('path_rotate_in_place_threshold_deg', 35.0)
+
+        self.map_path = self.get_parameter('map_path').value
+        self.wheel_radius_m = float(self.get_parameter('wheel_radius_m').value)
+        self.wheel_separation_m = float(self.get_parameter('wheel_separation_m').value)
+
+        self.max_linear_x = float(self.get_parameter('max_linear_x').value)
+        self.max_angular_z = float(self.get_parameter('max_angular_z').value)
+
+        self.k_linear = float(self.get_parameter('k_linear').value)
+        self.k_angular_rotate = float(self.get_parameter('k_angular_rotate').value)
+        self.k_angular_move = float(self.get_parameter('k_angular_move').value)
+
+        self.min_linear_x = float(self.get_parameter('min_linear_x').value)
+
+        self.heading_tolerance_rad = math.radians(float(self.get_parameter('heading_tolerance_deg').value))
+        self.cell_reached_tolerance_m = float(self.get_parameter('cell_reached_tolerance_m').value)
+
+        self.control_period_s = float(self.get_parameter('control_period_s').value)
+        self.feedback_timeout_s = float(self.get_parameter('feedback_timeout_s').value)
+        self.stop_dwell_s = float(self.get_parameter('stop_dwell_s').value)
+
+        self.robot_length_m = float(self.get_parameter('robot_length_m').value)
+        self.robot_width_m = float(self.get_parameter('robot_width_m').value)
+        self.side_body_clearance_m = float(self.get_parameter('side_body_clearance_m').value)
+        self.front_body_clearance_m = float(self.get_parameter('front_body_clearance_m').value)
+
+        self.obstacle_detect_distance_m_param = float(self.get_parameter('obstacle_detect_distance_m').value)
+        self.lidar_inflation_radius_m = float(self.get_parameter('lidar_inflation_radius_m').value)
+        self.lidar_obstacle_timeout_s = float(self.get_parameter('lidar_obstacle_timeout_s').value)
+        self.lidar_memory_duration_s = float(self.get_parameter('lidar_memory_duration_s').value)
+        self.wall_clearance_m = float(self.get_parameter('wall_clearance_m').value)
+        self.avoid_min_time_s = float(self.get_parameter('avoid_min_time_s').value)
+        self.avoid_obstacle_lost_timeout_s = float(self.get_parameter('avoid_obstacle_lost_timeout_s').value)
+        self.avoid_mode_cooldown_s = float(self.get_parameter('avoid_mode_cooldown_s').value)
+        self.rejoin_distance_m_param = float(self.get_parameter('rejoin_distance_m').value)
+        self.rejoin_heading_tolerance_rad = math.radians(float(self.get_parameter('rejoin_heading_tolerance_deg').value))
+        self.rejoin_search_ahead_cells = int(self.get_parameter('rejoin_search_ahead_cells').value)
+        self.path_rotate_in_place_threshold_rad = math.radians(float(self.get_parameter('path_rotate_in_place_threshold_deg').value))
+
+        # Dynamic Initial Pose State
+        self.initial_pose_received = False
+        self.initial_heading_name = None
+        self.initial_start_cell = None
+
+        # ------------------------------------------
+        # MAP
+        # ------------------------------------------
+        self.grid, self.grid_size, self.cell_size_m = self.load_map(self.map_path)
+
+        self.base_grid = [row[:] for row in self.grid]
+        self.temp_obstacle_cells = set()
+        self.lidar_obstacle_cells = set()
+        self.lidar_last_update_time = 0.0
+        self.lidar_obstacle_timeout_s = max(0.20, self.lidar_obstacle_timeout_s)
+        self.lidar_inflation_radius_m = max(0.0, self.lidar_inflation_radius_m)
+        self.lidar_memory_duration_s = max(0.20, self.lidar_memory_duration_s)
+
+        self.robot_length_m = max(0.05, self.robot_length_m)
+        self.robot_width_m = max(0.05, self.robot_width_m)
+        self.robot_half_length_m = 0.5 * self.robot_length_m
+        self.robot_half_width_m = 0.5 * self.robot_width_m
+        self.side_body_clearance_m = max(0.03, self.side_body_clearance_m)
+        self.front_body_clearance_m = max(0.05, self.front_body_clearance_m)
+
+        min_center_wall_clearance = self.robot_half_width_m + self.side_body_clearance_m
+        if self.wall_clearance_m <= 0.0:
+            self.wall_clearance_m = min_center_wall_clearance
+        else:
+            self.wall_clearance_m = max(self.wall_clearance_m, min_center_wall_clearance)
+
+        self.front_corridor_half_width_m = self.robot_half_width_m + self.side_body_clearance_m
+
+        self.lidar_emergency_stop = False
+        self.nearest_obstacle_distance = float('inf')
+
+        self.map_width_m = self.grid_size * self.cell_size_m
+        self.map_height_m = self.grid_size * self.cell_size_m
+
+        self.cell_reached_tolerance_m = max(self.cell_reached_tolerance_m, self.cell_size_m * 0.01, 0.0025)
+
+        if self.obstacle_detect_distance_m_param > 0.0:
+            self.obstacle_detect_distance_m = self.obstacle_detect_distance_m_param
+        else:
+            self.obstacle_detect_distance_m = max(
+                self.cell_size_m * 7.0,
+                self.robot_half_length_m + self.front_body_clearance_m + 0.45,
+                0.75
+            )
+
+        if self.rejoin_distance_m_param > 0.0:
+            self.rejoin_distance_m = self.rejoin_distance_m_param
+        else:
+            self.rejoin_distance_m = max(self.cell_size_m * 7.0, 0.65)
+
+        self.rejoin_search_ahead_cells = max(4, self.rejoin_search_ahead_cells)
+        self.path_rotate_in_place_threshold_rad = max(self.heading_tolerance_rad, self.path_rotate_in_place_threshold_rad)
+
+        # ------------------------------------------
+        # ROS INTERFACES
+        # ------------------------------------------
+        self.create_subscription(String, '/start_finish_command', self.start_finish_callback, 10)
+        self.create_subscription(String, '/dynamixel_feedback', self.feedback_callback, 10)
+        self.create_subscription(PointCloud2, '/navigation/obstacle_points', self.lidar_obstacle_points_callback, 10)
+        self.create_subscription(Bool, '/emergency_stop', self.lidar_emergency_callback, 10)
+        self.create_subscription(Float32, '/obstacle_nearest_distance', self.nearest_obstacle_callback, 10)
+
+        self.velocity_publisher = self.create_publisher(Twist, '/robot_velocity_command', 10)
+        self.status_publisher = self.create_publisher(String, '/planning_status', 10)
+
+        # ------------------------------------------
+        # MISSION / NAVIGATION STATE
+        # ------------------------------------------
+        self.requested_start = None   
+        self.actual_start = None      
+        self.goal = None
+
+        self.path = []
+        self.path_index = 0
+
+        self.state = 'IDLE'
+        self.mission_active = False
+
+        self.x = 0.0
+        self.y = 0.0
+        self.theta = 0.0
+        self.current_cell = None
+
+        self.last_feedback_time = None
+        self.feedback_ready = False
+
+        self.left_rpm = 0.0
+        self.right_rpm = 0.0
+
+        self.stop_until = 0.0
+        self.last_status_pub = 0.0
+
+        self.create_timer(self.control_period_s, self.control_loop)
+        self.create_timer(0.2, self.publish_status_periodic)
+
+        self.get_logger().info(
+            f'Computing Unit siap. grid_size={self.grid_size}, cell_size={self.cell_size_m:.3f} m. '
+            f'Menunggu initial pose dari control unit.'
+        )
+
+        # OBSTACLE AVOIDANCE STATE
+        self.mode = "PATH"
+        self.avoid_side = 1                   
+        self.avoid_obstacle_cell = None
+        self.avoid_obstacle_point = None       
+        self.avoid_start_time = 0.0
+        self.avoid_last_seen_time = 0.0
+        self.mode_cooldown_until = 0.0        
+        self.integral_error_dist = 0.0
+        self.avoid_entry_path_index = 0
+        
+        # LINE SENSOR STATE & GAINS
+        self.line_sensors = [0] * 16
+        self.last_line_error = 0.0
+        self.kp_line = 1.5 
+        self.kd_line = 0.5
+
+    # ==========================================
+    # MAP & COORDINATE SYSTEM
+    # ==========================================
+    def load_map(self, path):
+        with open(path, 'r') as f:
+            data = json.load(f)
+
+        grid = data['map']
+        grid_size = int(data['grid_size'])
+        cell_size_cm = float(data['cell_size_cm'])
+        cell_size_m = cell_size_cm / 100.0
+
+        if len(grid) != grid_size or any(len(row) != grid_size for row in grid):
+            raise ValueError('Ukuran map tidak konsisten dengan grid_size.')
+
+        allowed_values = {0, 1, 3}
+        for r, row in enumerate(grid):
+            for c, value in enumerate(row):
+                if value not in allowed_values:
+                    raise ValueError(f'Nilai map tidak valid di ({r}, {c}): {value}')
+        return grid, grid_size, cell_size_m
+
+    def cell_center_to_world(self, cell):
+        row, col = cell
+        x = (col + 0.5) * self.cell_size_m
+        y = (self.grid_size - row - 0.5) * self.cell_size_m
+        return x, y
+
+    def world_to_cell(self, x, y):
+        if not (0.0 <= x < self.map_width_m and 0.0 <= y < self.map_height_m):
+            return None
+        col = int(x / self.cell_size_m)
+        y_index = int(y / self.cell_size_m)
+        row = self.grid_size - 1 - y_index
+        if 0 <= row < self.grid_size and 0 <= col < self.grid_size:
+            return (row, col)
+        return None
+
+    # ==========================================
+    # HELPER MENGHITUNG SUDUT & CELL
+    # ==========================================
+    def heading_to_angle(self, heading_name):
+        heading_name = str(heading_name).strip().upper()
+        if heading_name == 'EAST': return 0.0
+        if heading_name == 'NORTH': return math.pi / 2.0
+        if heading_name == 'WEST': return math.pi
+        if heading_name == 'SOUTH': return -math.pi / 2.0
+        return 0.0
+
+    def is_valid_heading(self, heading_name):
+        return str(heading_name).strip().upper() in ('NORTH', 'EAST', 'SOUTH', 'WEST')
+
+    def snap_heading_to_cardinal(self, theta):
+        cardinals = [0.0, math.pi/2.0, math.pi, -math.pi/2.0]
+        best_angle = theta
+        min_diff = float('inf')
+        
+        for c in cardinals:
+            diff = abs(angle_diff(c, theta))
+            if diff < min_diff:
+                min_diff = diff
+                best_angle = c
+        return wrap_angle(best_angle)
+
+    def is_intersection(self, idx):
+        if not self.path:
+            return False
+        if idx <= 0 or idx >= len(self.path) - 1:
+            return True 
+
+        prev_cell = self.path[idx - 1]
+        curr_cell = self.path[idx]
+        next_cell = self.path[idx + 1]
+
+        dr1 = curr_cell[0] - prev_cell[0]
+        dc1 = curr_cell[1] - prev_cell[1]
+        dr2 = next_cell[0] - curr_cell[0]
+        dc2 = next_cell[1] - curr_cell[1]
+
+        return (dr1 != dr2) or (dc1 != dc2)
+
+    def is_valid_cell(self, cell):
+        row, col = cell
+        return 0 <= row < self.grid_size and 0 <= col < self.grid_size
+
+    def is_obstacle(self, cell):
+        row, col = cell
+        if math.isinf(cell_traversal_cost(self.base_grid[row][col])): return True
+        if cell in self.temp_obstacle_cells: return True
+        return False
+
+    def is_traversable(self, cell):
+        return not self.is_obstacle(cell)
+
+    def is_preferred_line(self, cell):
+        row, col = cell
+        return self.base_grid[row][col] == 1
+
+        # ==========================================
+    # A* EXECUTION LOGGER
+    # ==========================================
+    def log_astar_execution(self, mode_name, start_cell, goal_cell, exec_time, path_result):
+        try:
+            log_file = "astar_execution_log.txt"
+
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            if path_result is None:
+                path_length = 0
+                status = "FAILED"
+            else:
+                path_length = len(path_result)
+                status = "SUCCESS"
+
+            with open(log_file, "a") as f:
+                f.write(
+                    f"[{timestamp}] "
+                    f"MODE={mode_name} | "
+                    f"START={start_cell} | "
+                    f"GOAL={goal_cell} | "
+                    f"TIME={exec_time:.6f}s | "
+                    f"PATH_LENGTH={path_length} | "
+                    f"STATUS={status}\n"
+                )
+
+        except Exception as e:
+            self.get_logger().error(f"Gagal menyimpan log A*: {e}")
+    # ==========================================
+    # LIDAR INTEGRATION
+    # ==========================================
+    def lidar_emergency_callback(self, msg):
+        self.lidar_emergency_stop = bool(msg.data)
+
+    def nearest_obstacle_callback(self, msg):
+        self.nearest_obstacle_distance = float(msg.data)
+
+    def lidar_obstacle_points_callback(self, msg):
+        now = time.monotonic()
+        cells = set()
+        raw_points = []
+        max_detect_radius = max(self.obstacle_detect_distance_m, 0.60)
+
+        for p in point_cloud2.read_points(msg, field_names=('x', 'y', 'z'), skip_nans=True):
+            lx = float(p[0])  
+            ly = float(p[1])  
+            dist_from_robot = math.hypot(lx, ly)
+
+            if dist_from_robot > max_detect_radius: continue
+            if lx < -0.40: continue
+
+            wx = self.x + math.cos(self.theta) * lx - math.sin(self.theta) * ly
+            wy = self.y + math.sin(self.theta) * lx + math.cos(self.theta) * ly
+
+            raw_points.append((wx, wy, now))
+
+            cell = self.world_to_cell(wx, wy)
+            if cell is not None:
+                cells.add(cell)
+
+        inflated_new_cells = self.inflate_obstacle_cells(cells)
+        if not hasattr(self, 'lidar_cell_memory'):
+            self.lidar_cell_memory = {}
+        for c in inflated_new_cells:
+            self.lidar_cell_memory[c] = now
+
+        memory_duration = 1.5 
+        active_cells = set()
+        for c in list(self.lidar_cell_memory.keys()):
+            if now - self.lidar_cell_memory[c] > memory_duration:
+                del self.lidar_cell_memory[c]
+            else:
+                active_cells.add(c)
+
+        self.lidar_obstacle_cells = active_cells
+        self.temp_obstacle_cells = set(active_cells)
+
+        if not hasattr(self, 'lidar_raw_memory'):
+            self.lidar_raw_memory = []
+            
+        self.lidar_raw_memory.extend(raw_points)
+        self.lidar_raw_memory = [pt for pt in self.lidar_raw_memory if now - pt[2] <= memory_duration]
+        self.lidar_last_update_time = now
+
+    def inflate_obstacle_cells(self, cells):
+        inflated = set()
+        inflation_cells = int(math.ceil(self.lidar_inflation_radius_m / self.cell_size_m))
+
+        for row, col in cells:
+            for dr in range(-inflation_cells, inflation_cells + 1):
+                for dc in range(-inflation_cells, inflation_cells + 1):
+                    nr = row + dr
+                    nc = col + dc
+
+                    if not (0 <= nr < self.grid_size and 0 <= nc < self.grid_size):
+                        continue
+
+                    # Kotak: semua cell dalam range masuk
+                    inflated.add((nr, nc))
+
+        return inflated
+
+    def detect_obstacle_lidar(self):
+        now = time.monotonic()
+        if now - self.lidar_last_update_time > self.lidar_obstacle_timeout_s:
+            self.lidar_obstacle_cells.clear()
+            self.temp_obstacle_cells.clear()
+            return None
+
+        if self.current_cell is None or not self.lidar_obstacle_cells:
+            return None
+
+        best_cell = None
+        best_dist = float('inf')
+
+        for cell in self.lidar_obstacle_cells:
+            ox, oy = self.cell_center_to_world(cell)
+            dx = ox - self.x
+            dy = oy - self.y
+
+            rx = math.cos(-self.theta) * dx - math.sin(-self.theta) * dy
+            ry = math.sin(-self.theta) * dx + math.cos(-self.theta) * dy
+
+            if rx < 0.0: continue
+            dist = math.hypot(rx, ry)
+            if dist < best_dist:
+                best_dist = dist
+                best_cell = cell
+
+        return best_cell
+
+    def build_temporary_grid(self):
+        temp_grid = [row[:] for row in self.base_grid]
+        for row, col in self.temp_obstacle_cells:
+            if 0 <= row < self.grid_size and 0 <= col < self.grid_size:
+                temp_grid[row][col] = 0
+        return temp_grid
+
+    def cell_to_robot_frame(self, cell):
+        cx, cy = self.cell_center_to_world(cell)
+        dx = cx - self.x
+        dy = cy - self.y
+        rx = math.cos(-self.theta) * dx - math.sin(-self.theta) * dy
+        ry = math.sin(-self.theta) * dx + math.cos(-self.theta) * dy
+        return rx, ry
+
+    def should_enter_avoid_mode(self, obstacle_cell):
+        rx, ry = self.cell_to_robot_frame(obstacle_cell)
+        front_trigger_distance = self.wall_clearance_m + 0.05
+        body_corridor_half_width = self.front_corridor_half_width_m
+
+        if not (0.0 < rx <= front_trigger_distance): return False
+        if abs(ry) > body_corridor_half_width: return False
+
+        ox, oy = self.cell_center_to_world(obstacle_cell)
+        closest_path_idx = self.path_index
+        min_dist_to_path = float('inf')
+
+        scan_start = max(0, self.path_index - 4)
+        scan_end = min(len(self.path), self.path_index + 12)
+        for i in range(scan_start, scan_end):
+            px, py = self.cell_center_to_world(self.path[i])
+            d = math.hypot(px - ox, py - oy)
+            if d < min_dist_to_path:
+                min_dist_to_path = d
+                closest_path_idx = i
+
+        is_already_passed = closest_path_idx < max(0, self.path_index - 1)
+        return not is_already_passed
+
+
+    # ==========================================
+    # PATH HELPERS
+    # ==========================================
+    def build_combined_path(self, actual_start, requested_start, goal):
+        if not self.is_traversable(actual_start): return None, f'Actual start {actual_start} tidak traversable.'
+        if not self.is_traversable(requested_start): return None, f'Requested start {requested_start} tidak traversable.'
+        if not self.is_traversable(goal): return None, f'Goal {goal} tidak traversable.'
+
+        if actual_start == requested_start:
+            path_to_start = [actual_start]
+        else:
+            # STRICT LINE: Wajib di atas garis saat inisiasi rute PATH
+            t0 = time.perf_counter()
+
+            path_to_start = astar(
+                actual_start,
+                requested_start,
+                self.grid,
+                allow_offline=False
+            )
+
+            exec_time = time.perf_counter() - t0
+
+            self.log_astar_execution(
+                "STRICT_TO_START",
+                actual_start,
+                requested_start,
+                exec_time,
+                path_to_start
+            )
+
+            if path_to_start is None:
+                return None, f'Tidak ada path dari {actual_start} ke {requested_start}.'
+
+        if requested_start == goal:
+            path_to_goal = [requested_start]
+        else:
+            # STRICT LINE: Wajib di atas garis saat inisiasi rute PATH
+            t0 = time.perf_counter()
+
+            path_to_goal = astar(
+                requested_start,
+                goal,
+                self.grid,
+                allow_offline=False
+            )
+
+            exec_time = time.perf_counter() - t0
+
+            self.log_astar_execution(
+                "STRICT_TO_GOAL",
+                requested_start,
+                goal,
+                exec_time,
+                path_to_goal
+            )
+
+            if path_to_goal is None:
+                return None, f'Tidak ada path dari {requested_start} ke {goal}.'
+
+        if actual_start == requested_start: full_path = path_to_goal
+        else: full_path = path_to_start + path_to_goal[1:]
+
+        return full_path, None
+
+    # ==========================================
+    # MISSION INPUT
+    # ==========================================
+    def start_finish_callback(self, msg):
+        try:
+            data = json.loads(msg.data)
+            requested_start = tuple(data['start'])
+            goal = tuple(data['goal'])
+        except Exception as e:
+            self.get_logger().error(f'Gagal parse start/goal: {e}')
+            return
+
+        if not self.is_valid_cell(requested_start):
+            self.get_logger().warn(f'Start tidak valid: {requested_start}')
+            return
+        if not self.is_valid_cell(goal):
+            self.get_logger().warn(f'Goal tidak valid: {goal}')
+            return
+        if self.is_obstacle(requested_start):
+            self.get_logger().warn(f'Start berada di obstacle: {requested_start}')
+            return
+        if self.is_obstacle(goal):
+            self.get_logger().warn(f'Goal berada di obstacle: {goal}')
+            return
+
+        if not self.initial_pose_received:
+            initial_start_raw = data.get('initial_start')
+            initial_heading_raw = data.get('initial_heading')
+
+            if (initial_start_raw is None or initial_heading_raw is None) and 'initial_pose' in data:
+                initial_pose = data.get('initial_pose') or {}
+                if isinstance(initial_pose, dict):
+                    if 'start' in initial_pose:
+                        initial_start_raw = initial_pose.get('start')
+                    elif 'row' in initial_pose and 'col' in initial_pose:
+                        initial_start_raw = [initial_pose.get('row'), initial_pose.get('col')]
+                    initial_heading_raw = initial_pose.get('heading', initial_heading_raw)
+
+            if initial_start_raw is None or initial_heading_raw is None:
+                self.get_logger().warn(
+                    'Initial pose belum diterima. Command pertama harus berisi '
+                    'initial_start dan initial_heading.'
+                )
+                self.publish_zero_velocity()
+                return
+
+            try:
+                initial_start = tuple(initial_start_raw)
+                initial_heading = str(initial_heading_raw).strip().upper()
+            except Exception as e:
+                self.get_logger().warn(f'Initial pose tidak bisa diparse: {e}')
+                self.publish_zero_velocity()
+                return
+
+            if not self.is_valid_cell(initial_start):
+                self.get_logger().warn(f'Initial start tidak valid: {initial_start}')
+                self.publish_zero_velocity()
+                return
+            if self.is_obstacle(initial_start):
+                self.get_logger().warn(f'Initial start berada di obstacle: {initial_start}')
+                self.publish_zero_velocity()
+                return
+            if not self.is_valid_heading(initial_heading):
+                self.get_logger().warn(
+                    f'Initial heading tidak valid: {initial_heading}. '
+                    'Gunakan NORTH, EAST, SOUTH, atau WEST.'
+                )
+                self.publish_zero_velocity()
+                return
+
+            self.initial_start_cell = initial_start
+            self.initial_heading_name = initial_heading
+            self.initial_pose_received = True
+            self.reset_pose_to_start(initial_start, initial_heading)
+
+            self.get_logger().info(
+                f'Initial pose diterima -> cell={self.initial_start_cell}, '
+                f'heading={self.initial_heading_name}'
+            )
+
+        if self.current_cell is None:
+            actual_start = self.initial_start_cell
+            self.reset_pose_to_start(actual_start, self.initial_heading_name)
+        else:
+            actual_start = self.current_cell
+
+        if not self.is_valid_cell(actual_start):
+            actual_start = requested_start
+            self.reset_pose_to_start(requested_start)
+        if self.is_obstacle(actual_start):
+            actual_start = requested_start
+            self.reset_pose_to_start(requested_start)
+
+        full_path, error_msg = self.build_combined_path(actual_start, requested_start, goal)
+
+        if full_path is None:
+            self.get_logger().warn(error_msg)
+            self.requested_start = requested_start
+            self.actual_start = actual_start
+            self.goal = goal
+            self.path = []
+            self.path_index = 0
+            self.state = 'NO_PATH'
+            self.mission_active = False
+            self.publish_zero_velocity()
+            return
+
+        self.requested_start = requested_start
+        self.actual_start = actual_start
+        self.goal = goal
+        self.path = full_path
+        self.path_index = 1 if len(full_path) > 1 else 0
+        self.mode = "PATH"
+        self.get_logger().info(f'🤖 Misi Dimulai! Menuju Goal {self.goal}')
+        
+        if len(full_path) == 1:
+            self.current_cell = full_path[0]
+            self.state = 'ARRIVED'
+            self.mission_active = False
+            self.publish_zero_velocity()
+            return
+
+        self.state = 'ROTATING_INTERSECTION'
+        self.mission_active = True
+        self.stop_until = 0.0
+
+    def reset_pose_to_start(self, start_cell, heading_name=None):
+        self.x, self.y = self.cell_center_to_world(start_cell)
+
+        if heading_name is not None:
+            self.initial_heading_name = str(heading_name).strip().upper()
+
+        if self.initial_heading_name is not None:
+            self.theta = self.heading_to_angle(self.initial_heading_name)
+
+        self.current_cell = start_cell
+
+        self.left_rpm = 0.0
+        self.right_rpm = 0.0
+        self.last_feedback_time = None
+        self.feedback_ready = False
+
+    def calculate_line_error(self, sensors):
+        """
+        Mengembalikan (error_value, line_detected)
+        error_value: -1.0 (kiri) sampai 1.0 (kanan). 0.0 jika di tengah.
+        line_detected: boolean True jika ada garis, False jika keluar garis total.
+        """
+        weights = [-8, -7, -6, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 6, 7, 8]
+        sum_weight = 0
+        active_sensors = 0
+
+        for i in range(16):
+            if sensors[i] == 1:
+                sum_weight += weights[i]
+                active_sensors += 1
+
+        if active_sensors == 0:
+            return 0.0, False 
+
+        error = (sum_weight / active_sensors) / 8.0 
+        return error, True
+
+    # ==========================================
+    # FEEDBACK PARSING + ODOMETRY
+    # ==========================================
+    def feedback_callback(self, msg):
+        line = msg.data.strip()
+        if not line: return
+        if not line.startswith('FB'): return
+
+        parsed = self.parse_feedback_line(line)
+        if parsed is None:
+            self.get_logger().warn(f'Feedback tidak bisa diparse: {line}')
+            return
+
+        left_rpm, right_rpm, sensors = parsed
+        now = time.monotonic()
+
+        self.line_sensors = sensors 
+
+        if self.last_feedback_time is None:
+            self.left_rpm = left_rpm
+            self.right_rpm = right_rpm
+            self.last_feedback_time = now
+            self.feedback_ready = True
+            return
+
+        dt = now - self.last_feedback_time
+        self.last_feedback_time = now
+
+        if dt <= 0.0 or dt > 0.6:
+            self.left_rpm = left_rpm
+            self.right_rpm = right_rpm
+            return
+
+        self.left_rpm = left_rpm
+        self.right_rpm = right_rpm
+        self.integrate_odometry(left_rpm, right_rpm, dt)
+
+    def parse_feedback_line(self, line):
+        try:
+            normalized = line.replace(',', ' ')
+            parts = normalized.split()
+
+            if len(parts) < 19: return None
+            if parts[0] != 'FB': return None
+
+            left_rpm = float(parts[1])
+            right_rpm = float(parts[2])
+            sensors = [int(p) for p in parts[3:19]]
+
+            return left_rpm, right_rpm, sensors
+        except Exception:
+            return None
+
+    def rpm_to_mps(self, rpm):
+        return (rpm / 60.0) * (2.0 * math.pi * self.wheel_radius_m)
+
+    def integrate_odometry(self, left_rpm, right_rpm, dt):
+        v_l = self.rpm_to_mps(left_rpm)
+        v_r = self.rpm_to_mps(right_rpm)
+
+        v = 0.5 * (v_r + v_l)
+        omega = (v_r - v_l) / self.wheel_separation_m
+
+        theta_mid = self.theta + 0.5 * omega * dt
+        self.x += v * math.cos(theta_mid) * dt
+        self.y += v * math.sin(theta_mid) * dt
+        self.theta = wrap_angle(self.theta + omega * dt)
+
+        eps = 1e-6
+        self.x = clamp(self.x, 0.0 + eps, self.map_width_m - eps)
+        self.y = clamp(self.y, 0.0 + eps, self.map_height_m - eps)
+
+        cell = self.world_to_cell(self.x, self.y)
+        if cell is not None:
+            self.current_cell = cell
+
+
+    # ==========================================
+    # CONTROL LOOP
+    # ==========================================
+    # ==========================================
+    # CONTROL LOOP
+    # ==========================================
+    def control_loop(self):
+        now = time.monotonic()
+
+        if not self.mission_active:
+            self.publish_zero_velocity()
+            return
+
+        if self.lidar_emergency_stop:
+            self.publish_zero_velocity()
+            self.state = 'LIDAR_EMERGENCY_STOP'
+            return
+
+        if not self.feedback_ready:
+            self.publish_zero_velocity()
+            return
+
+        if self.last_feedback_time is None or (now - self.last_feedback_time) > self.feedback_timeout_s:
+            self.publish_zero_velocity()
+            self.state = 'WAITING_FEEDBACK'
+            return
+
+        if now < self.stop_until:
+            self.publish_zero_velocity()
+            return
+
+        if self.path_index >= len(self.path):
+            self.publish_zero_velocity()
+            self.state = 'ARRIVED'
+            self.mission_active = False
+            self.get_logger().info(f'Goal tercapai di cell={self.current_cell}')
+            return
+
+        # ==========================================
+        # 1. MODE SWITCH (TRIGGER DETOUR & REPLAN)
+        # ==========================================
+        obstacle_cell = self.detect_obstacle_lidar()
+
+        if self.mode == "PATH" and self.state != 'ROTATING_INTERSECTION':
+            if obstacle_cell is not None and now > self.mode_cooldown_until:
+                if self.should_enter_avoid_mode(obstacle_cell):
+                    
+                    self.get_logger().warn(f'⚠️ OBSTACLE TERDETEKSI di {obstacle_cell}! Memulai Replanning...')
+                    self.publish_zero_velocity()
+                    temp_grid = self.build_temporary_grid()
+                    
+                    step_ahead = 5
+                    target_idx = min(self.path_index + step_ahead, len(self.path) - 1)
+                    
+                    while target_idx < len(self.path) and temp_grid[self.path[target_idx][0]][self.path[target_idx][1]] == 0:
+                        target_idx += 1
+                    
+                    if target_idx >= len(self.path): target_idx = len(self.path) - 1
+                    local_target = self.path[target_idx]
+                    
+                    t0 = time.perf_counter()
+
+                    new_path = astar(
+                        self.current_cell,
+                        local_target,
+                        temp_grid,
+                        allow_offline=True
+                    )
+
+                    exec_time = time.perf_counter() - t0
+
+                    self.log_astar_execution(
+                        "LOCAL_DETOUR",
+                        self.current_cell,
+                        local_target,
+                        exec_time,
+                        new_path
+                    )
+                    
+                    if new_path is not None:
+                        self.get_logger().info('Gap cukup! Detour Local A* (Off-line) dijahit ke rute asli.')
+                        self.path = new_path + self.path[target_idx + 1:]
+                        self.mode = "AVOID" 
+                    else:
+                        self.get_logger().warn('Jalan tertutup! Global A* Replanning (Strict-line)...')
+                        t0 = time.perf_counter()
+
+                        global_path = astar(
+                            self.current_cell,
+                            self.goal,
+                            temp_grid,
+                            allow_offline=False
+                        )
+
+                        exec_time = time.perf_counter() - t0
+
+                        self.log_astar_execution(
+                            "GLOBAL_REPLAN",
+                            self.current_cell,
+                            self.goal,
+                            exec_time,
+                            global_path
+                        )
+                        
+                        if global_path is not None:
+                            self.get_logger().info('Rute alternatif via jalur utama ditemukan.')
+                            self.path = global_path
+                            self.mode = "PATH" 
+                        else:
+                            self.get_logger().error('Terjebak! Tidak ada jalan sama sekali.')
+                            return
+                    
+                    self.path_index = 1
+                    self.state = 'ROTATING_INTERSECTION'
+                    self.mode_cooldown_until = now + self.avoid_mode_cooldown_s
+                    return
+
+        # ==========================================
+        # 2. OPTIMISASI PROGRESS PATH (PASSED-CELL CHECKER)
+        # ==========================================
+        if self.path_index >= len(self.path):
+            self.publish_zero_velocity()
+            self.state = 'ARRIVED'
+            self.mission_active = False
+            return
+
+        # ==========================================
+        # 3. SELEKSI TARGET WAYPOINT & DETEKSI PERSIMPANGAN
+        # ==========================================
+        target_cell = self.path[self.path_index]
+        target_x, target_y = self.cell_center_to_world(target_cell)
+        distance = math.hypot(target_x - self.x, target_y - self.y)
+        is_offline = not self.is_preferred_line(target_cell)
+
+        # 3a. Cek apakah as roda sudah mencapai titik tengah sel (Odometri)
+        reached = (distance <= 0.025)
+        if not reached and self.path_index > 0:
+            prev_x, prev_y = self.cell_center_to_world(self.path[self.path_index - 1])
+            vx, vy = target_x - prev_x, target_y - prev_y 
+            rx, ry = self.x - prev_x, self.y - prev_y      
+            v_len2 = vx**2 + vy**2
+            if v_len2 > 0 and (rx * vx + ry * vy) >= v_len2:
+                reached = True
+
+        # 3b. Cek Sensor Garis Fisik untuk KALIBRASI OFFSET POSISI (X, Y)
+        garis_kiri = sum(self.line_sensors[0:3]) >= 1
+        garis_kanan = sum(self.line_sensors[13:16]) >= 1
+        is_physical_intersection = garis_kiri or garis_kanan
+        
+        if not hasattr(self, 'snapped_for_waypoint'):
+            self.snapped_for_waypoint = -1
+
+        # Jika sensor mengenai persimpangan fisik DAN target ke depan adalah persimpangan
+        if is_physical_intersection and self.is_intersection(self.path_index) and self.snapped_for_waypoint != self.path_index:
+            if not is_offline:
+                exact_x, exact_y = self.cell_center_to_world(target_cell)
+                
+                # Gunakan getattr agar tidak error jika kamu lupa inisialisasi di __init__.
+                # Default 0.10 meter (10 cm). Sesuaikan dengan hasil ukur fisik as roda ke lampu ujung!
+                sensor_offset_m = getattr(self, 'sensor_offset_m', 0.10) 
+                
+                # SNAP koordinat mundur searah orientasi robot
+                self.x = exact_x - (math.cos(self.theta) * sensor_offset_m)
+                self.y = exact_y - (math.sin(self.theta) * sensor_offset_m)
+                
+                self.snapped_for_waypoint = self.path_index
+                self.get_logger().info(f'✔️ Sensor hit persimpangan! Kalibrasi Offset. Sisa maju: {sensor_offset_m * 100:.1f} cm')
+                
+                # Update ulang nilai distance setelah posisi dikalibrasi agar robot lanjut jalan 
+                distance = math.hypot(target_x - self.x, target_y - self.y)
+                reached = False 
+
+        # 3c. Logika pergantian sel jika as roda benar-benar sudah tiba (Reached)
+        if reached:
+            self.current_cell = target_cell
+            self.path_index += 1
+            
+            if self.mode == "AVOID" and self.is_preferred_line(self.current_cell):
+                self.mode = "PATH"
+                self.get_logger().info('✅ Robot kembali ke jalur utama. Mode dikembalikan ke PATH.')
+
+            if self.path_index >= len(self.path):
+                self.publish_zero_velocity()
+                self.state = 'ARRIVED'
+                self.mission_active = False
+                self.get_logger().info('🏆 Misi Selesai! Robot sampai di tujuan.')
+                return
+
+            if self.is_intersection(self.path_index - 1):
+                self.publish_zero_velocity()
+                self.stop_until = now + self.stop_dwell_s
+                
+                self.state = 'ROTATING_INTERSECTION'
+                self.get_logger().info(f'📍 As roda tiba di {target_cell}. Berhenti & Mulai Rotasi!')
+                return  
+            else:
+                target_cell = self.path[self.path_index]
+
+        # ==========================================
+        # 4. KENDALI KEMUDI MOTOR
+        # ==========================================
+        line_error, line_detected = self.calculate_line_error(self.line_sensors)
+
+        if self.path_index > 0: prev_cell = self.path[self.path_index - 1]
+        else: prev_cell = self.current_cell
+            
+        dr = target_cell[0] - prev_cell[0]
+        dc = target_cell[1] - prev_cell[1]
+        
+        target_angle = self.theta 
+        if dc > 0: target_angle = 0.0
+        elif dr < 0: target_angle = math.pi / 2.0
+        elif dc < 0: target_angle = math.pi
+        elif dr > 0: target_angle = -math.pi / 2.0
+        
+        heading_error = wrap_angle(target_angle - self.theta)
+
+        if self.state == 'ROTATING_INTERSECTION':
+            linear_x = 0.0  
+            
+            if abs(heading_error) > math.radians(0.5):
+                angular_z = clamp(self.k_angular_rotate * heading_error, -self.max_angular_z, self.max_angular_z)
+                min_w = 0.25
+                if 0 <= angular_z < min_w: angular_z = min_w
+                elif -min_w < angular_z < 0: angular_z = -min_w
+            else:
+                self.state = 'FOLLOWING_LINE'
+                self.get_logger().info('✅ Rotasi Odometri selesai! Kembali maju.')
+                angular_z = 0.0
+
+            self.publish_velocity(linear_x, angular_z)
+
+        else: # FOLLOWING_LINE
+            linear_x = self.max_linear_x
+            
+            if not is_offline and line_detected:
+                p_term = self.kp_line * line_error
+                d_term = self.kd_line * (line_error - self.last_line_error)
+                angular_z = clamp(-(p_term + d_term), -self.max_angular_z, self.max_angular_z)
+                self.last_line_error = line_error
+                
+                # --- KALIBRASI SUDUT (THETA) SAAT JALAN LURUS ---
+                # Jika robot berjalan sangat stabil di tengah garis (error hampir 0)
+                if abs(line_error) < 0.15:
+                    self.theta = self.snap_heading_to_cardinal(self.theta)
+            else:
+                angular_z = clamp(self.k_angular_move * heading_error, -self.max_angular_z, self.max_angular_z)
+                
+            self.publish_velocity(linear_x, angular_z)
+
+    # ==========================================
+    # STATUS 
+    # ==========================================
+    def publish_status_periodic(self):
+        now = time.monotonic()
+        if now - self.last_status_pub < 0.2:
+            return
+        self.last_status_pub = now
+
+        target_cell = None
+        if self.path and self.path_index < len(self.path):
+            target_cell = self.path[self.path_index]
+
+        line_error, line_detected = self.calculate_line_error(self.line_sensors)
+
+        payload = {
+            "state": self.state,
+            "mission_active": self.mission_active,
+            "initial_pose_received": self.initial_pose_received,
+            "initial_start": self.initial_start_cell,
+            "initial_heading": self.initial_heading_name,
+            "requested_start": self.requested_start,
+            "actual_start": self.actual_start,
+            "goal": self.goal,
+            "current_cell": self.current_cell,
+            "target_cell": target_cell,
+            "path": self.path,
+            "path_index": self.path_index,
+            "path_length": len(self.path),
+            "navigation_mode": self.mode,
+            "pose": {
+                "x_m": round(self.x, 4),
+                "y_m": round(self.y, 4),
+                "theta_deg": round(math.degrees(self.theta), 2)
+            },
+            "left_rpm": round(self.left_rpm, 2),
+            "right_rpm": round(self.right_rpm, 2),
+            "line_sensors": self.line_sensors,
+            "line_error": round(line_error, 4),
+            "line_detected": line_detected,
+            "temp_obstacle_cells": sorted(list(self.temp_obstacle_cells)),
+            "lidar_obstacle_cells": sorted(list(self.lidar_obstacle_cells)),
+        }
+
+        msg = String()
+        msg.data = json.dumps(payload)
+        self.status_publisher.publish(msg)
+
+    # ==========================================
+    # PUBLISH VELOCITY
+    # ==========================================
+    def publish_velocity(self, linear_x, angular_z):
+        twist = Twist()
+        twist.linear.x = clamp(linear_x, -self.max_linear_x, self.max_linear_x)
+        twist.angular.z = clamp(angular_z, -self.max_angular_z, self.max_angular_z)
+        self.velocity_publisher.publish(twist)
+
+    def publish_zero_velocity(self):
+        twist = Twist()
+        twist.linear.x = 0.0
+        twist.angular.z = 0.0
+        self.velocity_publisher.publish(twist)
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = ComputingUnit()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.publish_zero_velocity()
+        node.destroy_node()
+        rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()

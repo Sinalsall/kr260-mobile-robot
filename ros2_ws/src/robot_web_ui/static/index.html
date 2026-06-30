@@ -1,0 +1,1074 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>KRIA Mobile Robot UI</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #eef0f4;
+      --card: #ffffff;
+      --panel-shadow: 0 4px 20px rgba(17, 24, 39, 0.07);
+      --line: #e2e6ed;
+      --line-strong: #d0d5de;
+      --text: #0f1824;
+      --muted: #778195;
+      --dark: #0f1824;
+      --btn-secondary-bg: #eef0f4;
+      --btn-secondary-text: #0f1824;
+      --track: #111827;
+      --blocked: #aeb6c4;
+      --open: #ffffff;
+      --start: #22c55e;
+      --finish: #ef4444;
+      --deploy: #f59e0b;
+      --path: #2563eb;
+      --target: #7c3aed;
+      --robot: #06b6d4;
+      --lidar: #f97316;
+      --grid-line: #dde2ea;
+      --cell: 16px;
+      --radius-card: 14px;
+      --radius-inner: 8px;
+      --font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    .page {
+      width: min(1480px, 100%);
+      margin: 0 auto;
+      padding: 18px;
+      display: grid;
+      grid-template-columns: 410px minmax(0, 1fr);
+      gap: 16px;
+      align-items: start;
+    }
+
+    .panel {
+      background: var(--card);
+      border: 1.5px solid var(--line);
+      border-radius: var(--radius-card);
+      box-shadow: var(--panel-shadow);
+    }
+
+    .left-panel { padding: 22px; }
+    .map-panel { padding: 22px; display: flex; flex-direction: column; }
+
+    .panel-title {
+      font-size: 22px;
+      font-weight: 800;
+      line-height: 1.2;
+      color: var(--text);
+    }
+
+    .section-title {
+      font-size: 14px;
+      font-weight: 800;
+      margin: 18px 0 10px;
+      color: var(--text);
+    }
+
+    .field-label {
+      display: block;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 6px;
+    }
+
+    .status-strip {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .status-pill {
+      min-height: 48px;
+      border: 1.5px solid var(--line);
+      border-radius: var(--radius-inner);
+      background: #fafbfc;
+      padding: 8px 10px;
+      overflow: hidden;
+    }
+
+    .status-label {
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .status-value {
+      color: var(--dark);
+      font-size: 14px;
+      font-weight: 800;
+      margin-top: 3px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .two-cols {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    input[type="text"], input[type="number"] {
+      width: 100%;
+      height: 38px;
+      border: 1.5px solid var(--line);
+      border-radius: var(--radius-inner);
+      padding: 0 12px;
+      background: #fafbfc;
+      font-family: var(--font);
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--dark);
+      outline: none;
+    }
+
+    select {
+      width: 100%;
+      height: 38px;
+      border: 1.5px solid var(--line);
+      border-radius: var(--radius-inner);
+      padding: 0 12px;
+      background: #fafbfc;
+      font-family: var(--font);
+      font-size: 13px;
+      font-weight: 800;
+      color: var(--dark);
+      outline: none;
+    }
+
+    input:focus, select:focus, textarea:focus { border-color: #a0aab8; }
+
+    .btn {
+      border: none;
+      border-radius: var(--radius-inner);
+      min-height: 38px;
+      padding: 0 14px;
+      font-family: var(--font);
+      font-size: 13px;
+      font-weight: 800;
+      cursor: pointer;
+      background: var(--btn-secondary-bg);
+      color: var(--btn-secondary-text);
+      transition: opacity 0.12s, transform 0.1s;
+      white-space: nowrap;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+
+    .btn:hover { opacity: 0.85; }
+    .btn:active { transform: translateY(1px); }
+    .btn.primary, .btn.active { background: var(--dark); color: #fff; }
+    .btn:disabled { opacity: 0.42; cursor: not-allowed; transform: none; }
+
+    .button-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .parameter-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .parameter-card {
+      border: 1.5px solid var(--line);
+      border-radius: var(--radius-inner);
+      padding: 10px 13px 11px;
+      background: #fafbfc;
+    }
+
+    .param-label {
+      font-size: 11px;
+      font-weight: 800;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+
+    .param-value, .param-card-input {
+      width: 100%;
+      border: none;
+      background: transparent;
+      font-family: var(--font);
+      font-size: 20px;
+      font-weight: 800;
+      color: var(--dark);
+      outline: none;
+      padding: 0;
+      height: auto;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 128px;
+      max-height: 220px;
+      border: 1.5px solid var(--line);
+      border-radius: var(--radius-inner);
+      padding: 11px 12px;
+      resize: vertical;
+      font-family: "Consolas", "SF Mono", monospace;
+      font-size: 11.5px;
+      font-weight: 600;
+      line-height: 1.4;
+      background: #fafbfc;
+      color: var(--dark);
+      outline: none;
+    }
+
+    .load-map-btn {
+      width: 100%;
+      margin-top: 12px;
+      min-height: 42px;
+      font-size: 15px;
+    }
+
+    .divider { height: 1px; background: var(--line); margin: 18px 0; }
+
+    .map-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 16px;
+    }
+
+    .mode-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .connection {
+      min-width: 132px;
+      border: 1.5px solid var(--line);
+      border-radius: var(--radius-inner);
+      background: #fafbfc;
+      padding: 10px;
+      text-align: right;
+    }
+
+    .connection-dot {
+      display: inline-block;
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #ef4444;
+      margin-right: 6px;
+    }
+
+    .connection-dot.live { background: #22c55e; }
+
+    .grid-card {
+      border: 1.5px solid var(--line);
+      border-radius: 12px;
+      padding: 18px;
+      background: #fff;
+      overflow: auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 680px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(40, var(--cell));
+      grid-template-rows: repeat(40, var(--cell));
+      width: fit-content;
+      height: fit-content;
+      border: 1px solid var(--grid-line);
+      user-select: none;
+      background: #fff;
+    }
+
+    .cell {
+      width: var(--cell);
+      height: var(--cell);
+      border: 1px solid var(--grid-line);
+      background: var(--open);
+      cursor: pointer;
+      position: relative;
+      transition: background 0.04s;
+    }
+
+    .cell.track { background: var(--track); }
+    .cell.blocked { background: var(--blocked); }
+    .cell.path { box-shadow: inset 0 0 0 3px rgba(37, 99, 235, 0.95); }
+    .cell.lidar-obstacle { box-shadow: inset 0 0 0 3px rgba(249, 115, 22, 0.95); }
+    .cell.start { background: var(--start); }
+    .cell.finish { background: var(--finish); }
+    .cell.target { background: var(--target); }
+    .cell.robot { background: var(--robot); }
+
+    .cell.deployed::after, .cell.robot::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 0;
+      height: 0;
+      transform: translate(-50%, -50%) rotate(var(--heading, 0deg));
+      border-left: calc(var(--cell) * 0.33) solid transparent;
+      border-right: calc(var(--cell) * 0.33) solid transparent;
+      border-bottom: calc(var(--cell) * 0.62) solid var(--deploy);
+      z-index: 3;
+    }
+
+    .cell.robot::after { border-bottom-color: #ffffff; }
+
+    .legend {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 14px;
+      margin-top: 12px;
+      padding: 0 2px;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--muted);
+    }
+
+    .swatch {
+      width: 13px;
+      height: 13px;
+      border-radius: 3px;
+      border: 1.5px solid var(--line);
+      background: #fff;
+      display: inline-block;
+      flex-shrink: 0;
+    }
+
+    .swatch.track { background: var(--track); border-color: var(--track); }
+    .swatch.blocked { background: var(--blocked); border-color: var(--blocked); }
+    .swatch.path { background: var(--path); border-color: var(--path); }
+    .swatch.robot { background: var(--robot); border-color: var(--robot); }
+    .swatch.lidar { background: var(--lidar); border-color: var(--lidar); }
+    .swatch.start { background: var(--start); border-color: var(--start); }
+    .swatch.finish { background: var(--finish); border-color: var(--finish); }
+
+    .deploy-help {
+      display: none;
+      margin-top: 10px;
+      border: 1px dashed var(--line-strong);
+      border-radius: var(--radius-inner);
+      padding: 10px 12px;
+      font-size: 12.5px;
+      line-height: 1.5;
+      color: #4b5563;
+      background: #f9fafb;
+    }
+
+    .deploy-help.visible { display: block; }
+    .file-input { display: none; }
+
+    .sensor-grid {
+      display: grid;
+      grid-template-columns: repeat(16, 1fr);
+      gap: 4px;
+      margin-top: 8px;
+    }
+
+    .sensor {
+      height: 22px;
+      border-radius: 5px;
+      border: 1px solid var(--line);
+      background: #f3f4f6;
+    }
+
+    .sensor.on { background: var(--track); border-color: var(--track); }
+
+    .message {
+      margin-top: 10px;
+      min-height: 20px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--muted);
+    }
+
+    .message.error { color: #dc2626; }
+    .message.ok { color: #16a34a; }
+    .message.warn { color: #b45309; }
+
+    @media (max-width: 1180px) {
+      :root { --cell: 14px; }
+      .page { grid-template-columns: 380px minmax(0,1fr); }
+    }
+
+    @media (max-width: 980px) {
+      :root { --cell: 12px; }
+      .page { grid-template-columns: 1fr; }
+      .grid-card { min-height: 520px; justify-content: flex-start; }
+    }
+
+    @media (max-width: 560px) {
+      .page { padding: 10px; }
+      .two-cols, .button-row, .parameter-grid, .status-strip { grid-template-columns: 1fr; }
+      .map-header { flex-direction: column; }
+      .connection { text-align: left; width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="panel left-panel">
+      <h1 class="panel-title">System Parameters</h1>
+
+      <h2 class="section-title">Robot Status</h2>
+      <div class="status-strip">
+        <div class="status-pill"><div class="status-label">State</div><div id="stateValue" class="status-value">-</div></div>
+        <div class="status-pill"><div class="status-label">Mode</div><div id="modeValue" class="status-value">-</div></div>
+        <div class="status-pill"><div class="status-label">Current</div><div id="currentValue" class="status-value">-</div></div>
+        <div class="status-pill"><div class="status-label">Target</div><div id="targetValue" class="status-value">-</div></div>
+      </div>
+
+      <div class="status-strip">
+        <div class="status-pill"><div class="status-label">Pose</div><div id="poseValue" class="status-value">-</div></div>
+        <div class="status-pill"><div class="status-label">Velocity</div><div id="velocityValue" class="status-value">-</div></div>
+        <div class="status-pill"><div class="status-label">RPM actual</div><div id="rpmActualValue" class="status-value">-</div></div>
+        <div class="status-pill"><div class="status-label">RPM command</div><div id="rpmCommandValue" class="status-value">-</div></div>
+        <div class="status-pill"><div class="status-label">Obstacle</div><div id="obstacleValue" class="status-value">-</div></div>
+        <div class="status-pill"><div class="status-label">E-Stop</div><div id="estopValue" class="status-value">-</div></div>
+      </div>
+
+      <h2 class="section-title">Line Sensors</h2>
+      <div id="sensorGrid" class="sensor-grid" aria-label="Line sensor states"></div>
+
+      <div class="divider"></div>
+
+      <h2 class="section-title" style="margin-top:0">Navigation Parameters</h2>
+      <div class="two-cols">
+        <div>
+          <label class="field-label" for="selectedDeploy">Deployed Position</label>
+          <input id="selectedDeploy" type="text" placeholder="row, col" readonly />
+        </div>
+        <div>
+          <label class="field-label" for="initialHeading">Initial Heading</label>
+          <select id="initialHeading">
+            <option value="NORTH">NORTH</option>
+            <option value="EAST" selected>EAST</option>
+            <option value="SOUTH">SOUTH</option>
+            <option value="WEST">WEST</option>
+          </select>
+        </div>
+      </div>
+      <div class="two-cols">
+        <div>
+          <label class="field-label" for="selectedStart">Selected Start</label>
+          <input id="selectedStart" type="text" placeholder="row, col" readonly />
+        </div>
+        <div>
+          <label class="field-label" for="selectedFinish">Selected Finish</label>
+          <input id="selectedFinish" type="text" placeholder="row, col" readonly />
+        </div>
+      </div>
+
+      <div class="button-row">
+        <button id="startNavBtn" class="btn primary">Start Nav</button>
+        <button id="stopNavBtn" class="btn" disabled>Stop Nav</button>
+      </div>
+      <div id="message" class="message"></div>
+
+      <div class="divider"></div>
+
+      <h2 class="section-title" style="margin-top:0">Map Input</h2>
+      <div class="parameter-grid">
+        <div class="parameter-card">
+          <div class="param-label">Cell size (cm)</div>
+          <input class="param-card-input" id="cellSizeCm" type="number" min="1" step="1" value="5" />
+        </div>
+        <div class="parameter-card">
+          <div class="param-label">Grid size</div>
+          <div id="gridSizeValue" class="param-value">40 x 40</div>
+        </div>
+      </div>
+
+      <label class="field-label" for="jsonText">JSON import / output</label>
+      <textarea id="jsonText" placeholder='Paste JSON di sini, klik Import JSON, atau klik Export JSON untuk menyimpan layout.'></textarea>
+
+      <div class="button-row">
+        <button id="exportBtn" class="btn primary">Export JSON</button>
+        <button id="importFileBtn" class="btn">Import JSON</button>
+      </div>
+
+      <button id="loadMapBtn" class="btn load-map-btn">Load Map From Text</button>
+      <button id="reloadDefaultBtn" class="btn load-map-btn">Reload KRIA map.json</button>
+      <button id="saveMapBtn" class="btn primary load-map-btn">Save to KRIA map.json</button>
+      <div id="mapSaveStatus" class="message">Map belum diubah.</div>
+    </section>
+
+    <section class="panel map-panel">
+      <div class="map-header">
+        <div>
+          <h1 class="panel-title">Mobile Robot Grid Map</h1>
+          <div class="mode-row">
+            <button class="btn active" data-mode="edit-track">Draw Track</button>
+            <button class="btn" data-mode="edit-open">Draw Open</button>
+            <button class="btn" data-mode="edit-blocked">Draw Blocked</button>
+            <button class="btn" data-mode="start">Klik Start</button>
+            <button class="btn" data-mode="finish">Klik Finish</button>
+            <button class="btn" data-mode="deploy">Deployed Position</button>
+          </div>
+        </div>
+        <div class="connection">
+          <div class="status-label"><span id="connectionDot" class="connection-dot"></span><span id="connectionValue">Offline</span></div>
+          <div id="seqValue" class="status-value">seq -</div>
+        </div>
+      </div>
+
+      <div class="grid-card">
+        <div id="grid" class="grid"></div>
+      </div>
+
+      <div class="legend">
+        <div class="legend-item"><span class="swatch track"></span> track</div>
+        <div class="legend-item"><span class="swatch"></span> open</div>
+        <div class="legend-item"><span class="swatch blocked"></span> blocked</div>
+        <div class="legend-item"><span class="swatch path"></span> A* path</div>
+        <div class="legend-item"><span class="swatch robot"></span> robot</div>
+        <div class="legend-item"><span class="swatch lidar"></span> obstacle</div>
+        <div class="legend-item"><span class="swatch start"></span> start</div>
+        <div class="legend-item"><span class="swatch finish"></span> finish</div>
+      </div>
+
+      <div id="deployHelp" class="deploy-help">
+        Deployed Position: klik sel untuk menempatkan panah oranye. Klik posisi yang sama untuk menghapus.
+      </div>
+    </section>
+  </main>
+
+  <input id="fileInput" class="file-input" type="file" accept="application/json,.json" />
+
+  <script>
+    let GRID_SIZE = 40;
+    const BLOCKED = 0;
+    const TRACK = 1;
+    const OPEN = 3;
+
+    let grid = createEmptyGrid();
+    let cellSizeCm = 5;
+    let selectedStart = null;
+    let selectedFinish = null;
+    let deployedPosition = null;
+    let activeMode = "edit-track";
+    let isDragging = false;
+    let dragValue = null;
+    let telemetry = {};
+    let mapDirty = false;
+
+    const gridEl = document.getElementById("grid");
+    const jsonTextEl = document.getElementById("jsonText");
+    const selectedStartEl = document.getElementById("selectedStart");
+    const selectedFinishEl = document.getElementById("selectedFinish");
+    const selectedDeployEl = document.getElementById("selectedDeploy");
+    const initialHeadingEl = document.getElementById("initialHeading");
+    const cellSizeCmEl = document.getElementById("cellSizeCm");
+    const gridSizeValue = document.getElementById("gridSizeValue");
+    const fileInput = document.getElementById("fileInput");
+    const deployHelp = document.getElementById("deployHelp");
+    const messageEl = document.getElementById("message");
+    const mapSaveStatusEl = document.getElementById("mapSaveStatus");
+    const saveMapBtn = document.getElementById("saveMapBtn");
+    const connectionDot = document.getElementById("connectionDot");
+    const connectionValue = document.getElementById("connectionValue");
+    const seqValue = document.getElementById("seqValue");
+
+    function createEmptyGrid() {
+      return Array.from({ length: GRID_SIZE }, () => Array(GRID_SIZE).fill(OPEN));
+    }
+
+    function normalizeCellValue(v) {
+      if (v === BLOCKED || v === TRACK || v === OPEN) return v;
+      return OPEN;
+    }
+
+    function normalizeGrid(map) {
+      const g = createEmptyGrid();
+      for (let r = 0; r < GRID_SIZE; r++) {
+        for (let c = 0; c < GRID_SIZE; c++) {
+          g[r][c] = normalizeCellValue(map?.[r]?.[c]);
+        }
+      }
+      return g;
+    }
+
+    function coordText(pt) {
+      return pt ? `${pt.row}, ${pt.col}` : "";
+    }
+
+    function arrayCellToPoint(cell) {
+      return Array.isArray(cell) && cell.length >= 2 ? { row: cell[0], col: cell[1] } : null;
+    }
+
+    function cellKey(row, col) {
+      return `${row},${col}`;
+    }
+
+    function isSameCell(point, row, col) {
+      return point && point.row === row && point.col === col;
+    }
+
+    function poseToCell(pose) {
+      if (!pose || typeof pose.x_m !== "number" || typeof pose.y_m !== "number") return null;
+      const cellSizeM = cellSizeCm / 100.0;
+      const col = Math.floor(pose.x_m / cellSizeM);
+      const yIndex = Math.floor(pose.y_m / cellSizeM);
+      const row = GRID_SIZE - 1 - yIndex;
+      if (row < 0 || row >= GRID_SIZE || col < 0 || col >= GRID_SIZE) return null;
+      return { row, col };
+    }
+
+    function obstaclePointToCell(point, pose) {
+      if (!point || !pose || typeof pose.x_m !== "number" || typeof pose.y_m !== "number") return null;
+      const theta = (pose.theta_deg || 0) * Math.PI / 180;
+      const wx = pose.x_m + Math.cos(theta) * point.x - Math.sin(theta) * point.y;
+      const wy = pose.y_m + Math.sin(theta) * point.x + Math.cos(theta) * point.y;
+      return poseToCell({ x_m: wx, y_m: wy });
+    }
+
+    function getPathSet(status) {
+      const set = new Set();
+      const path = Array.isArray(status?.path) ? status.path : [];
+      path.forEach(cell => {
+        const point = arrayCellToPoint(cell);
+        if (point) set.add(cellKey(point.row, point.col));
+      });
+      return set;
+    }
+
+    function getObstacleSet(status) {
+      const set = new Set();
+      const cells = Array.isArray(status?.lidar_obstacle_cells) ? status.lidar_obstacle_cells : [];
+      cells.concat(status?.temp_obstacle_cells || []).forEach(cell => {
+        const point = arrayCellToPoint(cell);
+        if (point) set.add(cellKey(point.row, point.col));
+      });
+
+      const pose = status?.pose;
+      (telemetry.obstacle_points || []).forEach(point => {
+        const cell = obstaclePointToCell(point, pose);
+        if (cell) set.add(cellKey(cell.row, cell.col));
+      });
+      return set;
+    }
+
+    function updateFields() {
+      selectedStartEl.value = coordText(selectedStart);
+      selectedFinishEl.value = coordText(selectedFinish);
+      selectedDeployEl.value = coordText(deployedPosition);
+      cellSizeCmEl.value = cellSizeCm;
+      gridSizeValue.textContent = `${GRID_SIZE} x ${GRID_SIZE}`;
+      gridEl.style.gridTemplateColumns = `repeat(${GRID_SIZE}, var(--cell))`;
+      gridEl.style.gridTemplateRows = `repeat(${GRID_SIZE}, var(--cell))`;
+    }
+
+    function getCellClass(r, c, status, pathSet, obstacleSet, robotCell, targetCell) {
+      const classes = ["cell"];
+      if (grid[r][c] === TRACK) classes.push("track");
+      if (grid[r][c] === BLOCKED) classes.push("blocked");
+      if (pathSet.has(cellKey(r, c))) classes.push("path");
+      if (obstacleSet.has(cellKey(r, c))) classes.push("lidar-obstacle");
+      if (isSameCell(selectedStart, r, c)) classes.push("start");
+      if (isSameCell(selectedFinish, r, c)) classes.push("finish");
+      if (isSameCell(targetCell, r, c)) classes.push("target");
+      if (isSameCell(deployedPosition, r, c)) classes.push("deployed");
+      if (isSameCell(robotCell, r, c)) classes.push("robot");
+      return classes.join(" ");
+    }
+
+    function renderGrid() {
+      const status = telemetry.planning_status || {};
+      const pathSet = getPathSet(status);
+      const obstacleSet = getObstacleSet(status);
+      const robotCell = arrayCellToPoint(status.current_cell) || poseToCell(status.pose);
+      const targetCell = arrayCellToPoint(status.target_cell);
+      const heading = status?.pose?.theta_deg || 0;
+
+      gridEl.innerHTML = "";
+      const frag = document.createDocumentFragment();
+      for (let r = 0; r < GRID_SIZE; r++) {
+        for (let c = 0; c < GRID_SIZE; c++) {
+          const cell = document.createElement("button");
+          cell.type = "button";
+          cell.className = getCellClass(r, c, status, pathSet, obstacleSet, robotCell, targetCell);
+          cell.title = `row ${r}, col ${c}`;
+          if (isSameCell(robotCell, r, c)) cell.style.setProperty("--heading", `${90 - heading}deg`);
+          if (isSameCell(deployedPosition, r, c)) cell.style.setProperty("--heading", `${deployedPosition.headingDeg || 180}deg`);
+          cell.addEventListener("mousedown", e => {
+            e.preventDefault();
+            handleCellClick(r, c);
+          });
+          cell.addEventListener("mouseenter", () => {
+            if (!activeMode.startsWith("edit") || !isDragging || dragValue === null) return;
+            grid[r][c] = dragValue;
+            cleanupMarkers(r, c);
+            markMapDirty();
+            renderGrid();
+          });
+          frag.appendChild(cell);
+        }
+      }
+      gridEl.appendChild(frag);
+      updateFields();
+    }
+
+    function cleanupMarkers(r, c) {
+      if (grid[r][c] !== BLOCKED) return;
+      if (isSameCell(selectedStart, r, c)) selectedStart = null;
+      if (isSameCell(selectedFinish, r, c)) selectedFinish = null;
+      if (isSameCell(deployedPosition, r, c)) deployedPosition = null;
+    }
+
+    function handleCellClick(r, c) {
+      if (activeMode.startsWith("edit")) {
+        const next = activeMode === "edit-track" ? TRACK : activeMode === "edit-blocked" ? BLOCKED : OPEN;
+        grid[r][c] = next;
+        dragValue = next;
+        isDragging = true;
+        cleanupMarkers(r, c);
+        markMapDirty();
+        renderGrid();
+        return;
+      }
+
+      if (activeMode === "start") {
+        if (grid[r][c] === BLOCKED) return showMessage("Start tidak boleh berada di blocked cell.", "error");
+        selectedStart = isSameCell(selectedStart, r, c) ? null : { row: r, col: c };
+        markMapDirty("Start berubah di browser. Klik Save to KRIA map.json untuk menyimpan metadata map.");
+        renderGrid();
+        return;
+      }
+
+      if (activeMode === "finish") {
+        if (grid[r][c] === BLOCKED) return showMessage("Finish tidak boleh berada di blocked cell.", "error");
+        selectedFinish = isSameCell(selectedFinish, r, c) ? null : { row: r, col: c };
+        markMapDirty("Finish berubah di browser. Klik Save to KRIA map.json untuk menyimpan metadata map.");
+        renderGrid();
+        return;
+      }
+
+      if (activeMode === "deploy") {
+        if (grid[r][c] === BLOCKED) return showMessage("Deployed position tidak boleh berada di blocked cell.", "error");
+        deployedPosition = isSameCell(deployedPosition, r, c) ? null : {
+          row: r,
+          col: c,
+          heading: initialHeadingEl.value,
+          headingDeg: headingNameToDeg(initialHeadingEl.value),
+        };
+        markMapDirty("Deployed Position berubah di browser. Klik Save to KRIA map.json untuk menyimpan metadata map.");
+        renderGrid();
+      }
+    }
+
+    function setActiveMode(mode, btn) {
+      activeMode = mode;
+      document.querySelectorAll("[data-mode]").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      deployHelp.classList.toggle("visible", mode === "deploy");
+    }
+
+    function getExportData() {
+      return {
+        grid_size: GRID_SIZE,
+        cell_size_cm: Number(cellSizeCmEl.value) || cellSizeCm,
+        map: grid,
+        start: selectedStart,
+        finish: selectedFinish,
+        deployed_position: deployedPosition ? {
+          row: deployedPosition.row,
+          col: deployedPosition.col,
+          heading: initialHeadingEl.value,
+        } : null,
+      };
+    }
+
+    function applyImportedData(parsed, options = {}) {
+      if (!parsed) throw new Error("JSON kosong.");
+      const sourceMap = Array.isArray(parsed) ? parsed : parsed.map;
+      const size = Number(parsed.grid_size || sourceMap?.length || GRID_SIZE);
+      GRID_SIZE = size > 0 ? size : 40;
+      cellSizeCm = Number(parsed.cell_size_cm || cellSizeCmEl.value || 5);
+      grid = normalizeGrid(sourceMap);
+      selectedStart = parsed.start || parsed.navigation?.start || null;
+      selectedFinish = parsed.finish || parsed.navigation?.finish || null;
+      deployedPosition = normalizeDeployedPosition(parsed.deployed_position || null);
+      if (deployedPosition?.heading) initialHeadingEl.value = deployedPosition.heading;
+      renderGrid();
+      if (options.markDirty === false) {
+        setMapDirty(false, options.statusText || "Map sesuai KRIA map.json.");
+      } else {
+        markMapDirty(options.statusText || "Map berhasil dimuat di sesi browser. Klik Save to KRIA map.json untuk menyimpan.");
+      }
+      showMessage(options.message || "Map berhasil dimuat di sesi browser.", "ok");
+    }
+
+    function exportJson() {
+      const content = JSON.stringify(getExportData(), null, 2);
+      jsonTextEl.value = content;
+      const blob = new Blob([content], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = Object.assign(document.createElement("a"), { href: url, download: "map.json" });
+      a.click();
+      URL.revokeObjectURL(url);
+      showMessage("JSON diekspor dari browser.", "ok");
+    }
+
+    async function loadDefaultMap() {
+      try {
+        const res = await fetch("/api/map", { cache: "no-store" });
+        if (!res.ok) throw new Error(await res.text());
+        applyImportedData(await res.json(), {
+          markDirty: false,
+          message: "KRIA map.json berhasil dimuat.",
+          statusText: "Map sesuai KRIA map.json.",
+        });
+      } catch (err) {
+        showMessage(`Gagal load map default: ${err.message}`, "error");
+      }
+    }
+
+    async function saveMapToServer() {
+      const payload = getExportData();
+      saveMapBtn.disabled = true;
+      setMapSaveStatus("Menyimpan map ke KRIA map.json...", "warn");
+      try {
+        const res = await fetch("/api/map", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "save map gagal");
+        setMapDirty(false, `Map tersimpan. Backup: ${data.backup_path}. Restart Computing Unit agar runtime memakai map baru.`);
+        showMessage("Map berhasil disimpan ke KRIA map.json. Restart Computing Unit agar map baru dipakai.", "ok");
+      } catch (err) {
+        setMapSaveStatus(`Gagal simpan map: ${err.message}`, "error");
+        showMessage(`Gagal simpan map: ${err.message}`, "error");
+      } finally {
+        saveMapBtn.disabled = false;
+      }
+    }
+
+    async function startNavigation() {
+      if (!selectedStart || !selectedFinish) {
+        showMessage("Pilih Start dan Finish terlebih dahulu.", "error");
+        return;
+      }
+      const initialPoseAlreadyReceived = telemetry?.planning_status?.initial_pose_received === true;
+      if (!deployedPosition && !initialPoseAlreadyReceived) {
+        showMessage("Pilih Deployed Position terlebih dahulu untuk initial pose computing unit.", "error");
+        return;
+      }
+      try {
+        const initialHeading = initialHeadingEl.value;
+        const payload = {
+          start: [selectedStart.row, selectedStart.col],
+          goal: [selectedFinish.row, selectedFinish.col],
+        };
+
+        if (!initialPoseAlreadyReceived) {
+          payload.initial_pose = {
+            start: [deployedPosition.row, deployedPosition.col],
+            heading: initialHeading,
+          };
+        }
+
+        const res = await fetch("/api/navigation/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "request gagal");
+        if (payload.initial_pose) {
+          showMessage(`Waypoint terkirim dengan initial ${coordText(deployedPosition)} ${initialHeading}.`, "ok");
+        } else {
+          showMessage("Waypoint terkirim. Initial pose sudah diterima computing unit.", "ok");
+        }
+      } catch (err) {
+        showMessage(`Gagal kirim waypoint: ${err.message}`, "error");
+      }
+    }
+
+    function headingNameToDeg(heading) {
+      if (heading === "NORTH") return 0;
+      if (heading === "EAST") return 90;
+      if (heading === "SOUTH") return 180;
+      if (heading === "WEST") return 270;
+      return 90;
+    }
+
+    function normalizeDeployedPosition(value) {
+      if (!value) return null;
+      const row = Number(value.row);
+      const col = Number(value.col);
+      const heading = String(value.heading || initialHeadingEl.value || "EAST").toUpperCase();
+      if (!Number.isInteger(row) || !Number.isInteger(col)) return null;
+      return {
+        row,
+        col,
+        heading,
+        headingDeg: headingNameToDeg(heading),
+      };
+    }
+
+    function showMessage(text, level) {
+      messageEl.textContent = text;
+      messageEl.className = `message ${level || ""}`;
+    }
+
+    function setMapSaveStatus(text, level) {
+      mapSaveStatusEl.textContent = text;
+      mapSaveStatusEl.className = `message ${level || ""}`;
+    }
+
+    function setMapDirty(dirty, text) {
+      mapDirty = dirty;
+      if (dirty) {
+        setMapSaveStatus(text || "Map berubah di browser. Klik Save to KRIA map.json untuk menyimpan.", "warn");
+      } else {
+        setMapSaveStatus(text || "Map sesuai KRIA map.json.", "ok");
+      }
+    }
+
+    function markMapDirty(text) {
+      setMapDirty(true, text);
+    }
+
+    function fmtCell(cell) {
+      const point = arrayCellToPoint(cell);
+      return point ? `${point.row},${point.col}` : "-";
+    }
+
+    function fmtNum(value, digits = 2) {
+      return typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "-";
+    }
+
+    function updateStatusPanel() {
+      const status = telemetry.planning_status || {};
+      document.getElementById("stateValue").textContent = status.state || "-";
+      document.getElementById("modeValue").textContent = status.navigation_mode || "-";
+      document.getElementById("currentValue").textContent = fmtCell(status.current_cell);
+      document.getElementById("targetValue").textContent = fmtCell(status.target_cell);
+
+      const pose = status.pose || {};
+      document.getElementById("poseValue").textContent =
+        `x ${fmtNum(pose.x_m)} y ${fmtNum(pose.y_m)} th ${fmtNum(pose.theta_deg, 1)}`;
+
+      const velocity = telemetry.velocity_command || {};
+      document.getElementById("velocityValue").textContent =
+        `v ${fmtNum(velocity.linear_x, 3)} w ${fmtNum(velocity.angular_z, 3)}`;
+
+      const fb = telemetry.feedback || {};
+      document.getElementById("rpmActualValue").textContent =
+        `L ${fmtNum(fb.left_rpm)} R ${fmtNum(fb.right_rpm)}`;
+
+      const rpm = telemetry.rpm_command || {};
+      document.getElementById("rpmCommandValue").textContent =
+        `L ${fmtNum(rpm.left_rpm)} R ${fmtNum(rpm.right_rpm)}`;
+
+      const nearest = telemetry.nearest_obstacle_distance;
+      document.getElementById("obstacleValue").textContent =
+        typeof nearest === "number" ? `${nearest.toFixed(2)} m` : "-";
+      document.getElementById("estopValue").textContent =
+        telemetry.emergency_stop === true ? "ACTIVE" : telemetry.emergency_stop === false ? "clear" : "-";
+
+      const sensors = status.line_sensors || fb.line_sensors || [];
+      renderSensors(sensors);
+      seqValue.textContent = `seq ${telemetry.seq ?? "-"}`;
+    }
+
+    function renderSensors(sensors) {
+      const sensorGrid = document.getElementById("sensorGrid");
+      sensorGrid.innerHTML = "";
+      for (let i = 0; i < 16; i++) {
+        const sensor = document.createElement("div");
+        sensor.className = `sensor ${Number(sensors[i]) === 1 ? "on" : ""}`;
+        sensor.title = `S${i}: ${Number(sensors[i]) === 1 ? "on" : "off"}`;
+        sensorGrid.appendChild(sensor);
+      }
+    }
+
+    function connectEvents() {
+      const events = new EventSource("/events");
+      events.addEventListener("open", () => {
+        connectionDot.classList.add("live");
+        connectionValue.textContent = "Live";
+      });
+      events.addEventListener("telemetry", event => {
+        telemetry = JSON.parse(event.data);
+        updateStatusPanel();
+        renderGrid();
+      });
+      events.addEventListener("error", () => {
+        connectionDot.classList.remove("live");
+        connectionValue.textContent = "Reconnecting";
+      });
+    }
+
+    document.querySelectorAll("[data-mode]").forEach(btn =>
+      btn.addEventListener("click", () => setActiveMode(btn.dataset.mode, btn))
+    );
+    document.getElementById("startNavBtn").addEventListener("click", startNavigation);
+    initialHeadingEl.addEventListener("change", () => {
+      if (deployedPosition) {
+        deployedPosition.heading = initialHeadingEl.value;
+        deployedPosition.headingDeg = headingNameToDeg(initialHeadingEl.value);
+        markMapDirty("Initial heading berubah di browser. Klik Save to KRIA map.json untuk menyimpan metadata map.");
+        renderGrid();
+      }
+    });
+    document.getElementById("exportBtn").addEventListener("click", exportJson);
+    saveMapBtn.addEventListener("click", saveMapToServer);
+    document.getElementById("importFileBtn").addEventListener("click", () => fileInput.click());
+    document.getElementById("loadMapBtn").addEventListener("click", () => {
+      try { applyImportedData(JSON.parse(jsonTextEl.value)); }
+      catch (err) { showMessage(`Format JSON tidak valid: ${err.message}`, "error"); }
+    });
+    document.getElementById("reloadDefaultBtn").addEventListener("click", loadDefaultMap);
+    fileInput.addEventListener("change", async e => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      try {
+        jsonTextEl.value = await file.text();
+        applyImportedData(JSON.parse(jsonTextEl.value));
+      } catch (err) {
+        showMessage(`File JSON gagal dibaca: ${err.message}`, "error");
+      }
+      fileInput.value = "";
+    });
+    document.addEventListener("mouseup", () => { isDragging = false; dragValue = null; });
+
+    renderSensors([]);
+    renderGrid();
+    loadDefaultMap();
+    connectEvents();
+  </script>
+</body>
+</html>

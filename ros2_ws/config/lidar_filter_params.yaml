@@ -1,0 +1,63 @@
+# LiDAR Processing Pipeline Parameters
+# LiDAR Processing Pipeline Parameters
+# Phase 2: ROI Classification enabled
+
+lidar_filter_node:
+  ros__parameters:
+    # ==============================================================================
+    # FILTER PARAMETERS
+    # ==============================================================================
+    filter:
+      range_min: 0.15        # Minimum valid range (m) - RPLidar A2M8 spec
+      range_max: 3.0         # Maximum range for processing (m) - arena is 2.1m diagonal
+
+    # ==============================================================================
+    # ROI PARAMETERS - Trapezoid Shape
+    # ==============================================================================
+    # Obstacle candidate ROI corridor
+    # Trapezoid widens with distance to match LiDAR scan geometry
+    roi:
+      x_min: 0.3             # Near boundary (m) - minimum forward distance
+      x_max: 1.0             # Far boundary (m) - maximum forward distance
+      y_base: 0.2            # Half-width at near distance (m) - total width = 0.4m
+      y_expansion_rate: 0.1  # Width increase per meter forward (m/m)
+                             # At x=0.3m: width = ±0.2m
+                             # At x=1.0m: width = ±0.3m (total 0.6m)
+      landmark_range_min: 0.2  # Landmark candidate min range (outside ROI)
+      landmark_range_max: 3.0  # Landmark candidate max range (outside ROI)
+
+    # ==============================================================================
+    # CLUSTERING PARAMETERS - Sequential Radial Clustering
+    # ==============================================================================
+    # PL-friendly: Streaming algorithm, processes points in scan order
+    cluster:
+      tolerance: 0.10        # Maximum distance between points in same cluster (m)
+      min_obj_size: 0.06     # Minimum obstacle dimension to be valid (m)
+      min_points: 3          # Minimum points required to form valid cluster
+
+    # ==============================================================================
+    # SAFETY ZONE PARAMETERS
+    # ==============================================================================
+    # Define danger zones based on obstacle distance
+    safety:
+      emergency_distance: 0.20   # Emergency stop threshold (m) - red zone
+      warning_distance: 0.50     # Warning threshold (m) - yellow zone
+
+    # ==============================================================================
+    # SYSTEM PARAMETERS
+    # ==============================================================================
+    system:
+      scan_topic: "/scan"           # Input LaserScan topic
+      scan_timeout_sec: 0.5         # Watchdog timeout - trigger e-stop if no data
+      enable_timing: true           # Enable performance profiling
+      timing_log_interval: 50       # Log performance every N scans
+
+# ==============================================================================
+# NOTES FOR FUTURE STAGES
+# ==============================================================================
+# Stage 4 (Landmark Detection) - To be added:
+#   - landmark.ransac_iterations
+#   - landmark.ransac_inlier_threshold
+#   - landmark.corner_angle_min
+#   - landmark.corner_angle_max
+#   - landmark.temporal_persistence_count
